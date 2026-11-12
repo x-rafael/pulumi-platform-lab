@@ -98,6 +98,8 @@ trước khi chuyển repo sang public: 6/8 run đầu tiên in ID thật.
 
 Bằng chứng nằm ở `keeptrack/Day4/evidence/01…04-*.txt` (ngoài repo, đã che account ID).
 
+> Các run 43185395051, 43191003578, 43191716209, 43192266735, 43192272296 và 43192438296 được trích dẫn ở trên đã bị **xoá** trước khi chuyển repo sang public, vì log in account ID thật. Kết quả của chúng được lưu ở file bằng chứng nói trên. Run 43212367473 (trên `main`) là bản log đã mask và còn tồn tại.
+
 **Chưa kiểm chứng:** simulator chỉ đánh giá identity policy, không cho biết provider Pulumi thực sự gọi những API nào.
 Quyền deploy đủ hay thiếu chỉ biết khi `pulumi up` chạy trong CI thật (Chặng 2–3). Ca âm dùng STS, vốn trả cùng một thông báo
 cho role *không tồn tại*; chúng chỉ có ý nghĩa vì role đích đã được chứng minh tồn tại ở nơi khác
