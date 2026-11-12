@@ -15,9 +15,9 @@ name: OIDC check
 on:
   workflow_dispatch:
     inputs:
-      dev_prod_pulumi:
+      env_pulumi:
         description: >-
-          Kết quả MONG ĐỢI khi environment dev/prod đổi token Pulumi. Mặc định `allowed` vì policy của chúng đã tồn tại;
+          Kết quả MONG ĐỢI khi environment dev/prod/pr-env đổi token Pulumi. Mặc định `allowed`: policy của dev và prod đã tồn tại; pr-env chỉ `allowed` SAU khi bạn thêm policy của nó;
           chọn `denied` chỉ khi kiểm lại trước lúc thêm policy (loại trừ policy dạng ...:environment:*).
           LƯU Ý: environment prod có required reviewers nên job prod sẽ đứng chờ phê duyệt ở MỖI lần dispatch.
         type: choice
@@ -179,14 +179,14 @@ jobs:
           if [ -n "${PULUMI_ACCESS_TOKEN:-}" ]; then echo "::error::token exported despite failure"; exit 1; fi
           echo "OK: denied, no token exported"
 
-  # Pulumi Cloud cho environment dev và prod: dùng lại đúng workflow này trước (denied) và sau (allowed) khi thêm policy.
+  # Pulumi Cloud cho environment dev, prod và pr-env: dùng lại đúng workflow này trước (denied) và sau (allowed) khi thêm policy.
   pulumi-dev-prod:
-    name: pulumi login (environment ${{ matrix.environment }}, expect ${{ inputs.dev_prod_pulumi }})
+    name: pulumi login (environment ${{ matrix.environment }}, expect ${{ inputs.env_pulumi }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        environment: [dev, prod]
+        environment: [dev, prod, pr-env]
     environment: ${{ matrix.environment }}
     permissions:
       contents: read
@@ -204,7 +204,7 @@ jobs:
       - name: Kết quả phải đúng kỳ vọng
         env:
           OUTCOME: ${{ steps.exchange.outcome }}
-          EXPECT: ${{ inputs.dev_prod_pulumi }}
+          EXPECT: ${{ inputs.env_pulumi }}
         run: |
           echo "exchange outcome: ${OUTCOME} (expected: ${EXPECT})"
           case "${EXPECT}:${OUTCOME}" in

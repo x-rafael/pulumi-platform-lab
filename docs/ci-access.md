@@ -134,12 +134,15 @@ Khi gặp AccessDenied thật, thêm một dòng: action thiếu, resource, vì 
 - **Event source mapping:** Get/Delete/Tag dùng UUID nên không giới hạn được theo tên (Create/Update thì có điều kiện function).
 - **Environment là ranh giới, nên phải được bảo vệ.** Workflow ở branch bất kỳ tham chiếu `environment: <tên>` chưa tồn tại sẽ tự tạo
   environment không bảo vệ. Hiện: `dev` và `prod` chỉ cho deploy từ `main`; `preview` không giới hạn branch (role chỉ đọc, dùng cho PR do
-  chủ repo kiểm soát); `pr-env` **chưa được tạo**, sẽ tạo với rule phù hợp ở Chặng 4 (đến lúc đó chỉ PR tin cậy trong cùng repo).
+  chủ repo kiểm soát); `pr-env` **đã được tạo có chủ đích** (biến `AWS_ROLE_ARN` = `lab-pr-env`) nhưng **chưa có reviewer hay branch policy**: job chạy trên PR có ref
+  `refs/pull/N/merge` nên cách giới hạn phải được kiểm bằng thử nghiệm ở Chặng 4 (đến lúc đó chỉ PR tin cậy trong cùng repo).
   `prod` đã có required reviewer (xem mục cổng phê duyệt bên dưới).
 - **Repo public ở tài khoản cá nhân (gói Free), từ 2026-11-12.** Trước đó repo private và API trả 403
-  `Upgrade to GitHub Pro or make this repository public to enable this feature.` cho `rulesets` và `branches/main/protection`; một PR có `unit` đỏ vẫn
-  `MERGEABLE`. Sau khi public, hai endpoint đó hết 403 (`rulesets` trả `[]`, `main` là `Branch not protected`): **cấu hình được nhưng chưa cấu hình**,
-  nên hiện **chưa có required check `unit` và check đỏ vẫn không chặn merge**. Merge queue vẫn không có vì chủ repo là `User`, nên trigger `merge_group`
+  `Upgrade to GitHub Pro or make this repository public to enable this feature.` cho `rulesets` và `branches/main/protection`; một PR có `unit` đỏ vẫn là
+  `UNSTABLE`/`MERGEABLE`. Sau khi public, ruleset dùng được và đã cấu hình **`protect-main`** (id 27118800, `active`, áp dụng cho branch mặc định):
+  bắt buộc check `unit` (từ GitHub Actions) , chặn xoá `main` và chặn force-push. **Repository admin được bypass (`always`)**: chủ repo có thể push thẳng hoặc
+  merge PR khi cần, nên đây là lớp bảo vệ cho PR chứ không phải ràng buộc với chủ repo. Đã kiểm: PR demo #4 có `unit` đỏ ra `mergeStateStatus: BLOCKED`
+  (trước đây `UNSTABLE`). Ruleset không yêu cầu PR hay số lượt review. Merge queue vẫn không có vì chủ repo là `User`, nên trigger `merge_group`
   trong `ci.yml` **đã viết, chưa kiểm chứng queue**. Required reviewers của environment `prod` **dùng được** trên repo public gói Free (đã cấu hình và chạy ở Chặng 3).
 - **Repo public: Actions log và lịch sử git là công khai.** Đã rà trước khi chuyển: lịch sử git sạch; 6/8 run đầu in account ID thật nên đã xoá, và workflow
   chuyển sang `secrets.AWS_ACCOUNT_ID` để GitHub mask. Phê duyệt workflow cho **mọi** PR từ bên ngoài đã bật (`all_external_contributors`); job `preview`
@@ -170,7 +173,7 @@ Cấu hình một lần ở Pulumi Cloud, do chủ organization làm trên giao 
 | Policy: Aud | `urn:pulumi:org:x-rafael-org` |
 | Policy: Sub | `repo:x-rafael@142369851/pulumi-platform-lab@1454985419:environment:preview` |
 
-Từ Chặng 3 có thêm hai policy y hệt, chỉ khác Sub: `…:environment:dev` (deploy dev) và `…:environment:prod` (cổng prod). Chặng 4 sẽ cần thêm một policy cho `…:environment:pr-env`.
+Từ Chặng 3 có thêm hai policy y hệt, chỉ khác Sub: `…:environment:dev` (deploy dev) và `…:environment:prod` (cổng prod). Chặng 4 cần thêm một policy cho `…:environment:pr-env` (Sub `repo:x-rafael@142369851/pulumi-platform-lab@1454985419:environment:pr-env`, còn lại như trên); `oidc-check.yml` đã có `pr-env` trong ma trận để kiểm sau khi thêm.
 
 Ghi chú về policy (theo tài liệu Pulumi):
 
