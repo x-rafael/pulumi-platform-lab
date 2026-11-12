@@ -1,0 +1,141 @@
+name: Deploy dev
+
+# Push vào main -> deploy stack dev của worker. Cũng chạy tay được (workflow_dispatch): environment `dev` chỉ cho
+# deploy từ `main`, nên dispatch từ branch khác bị từ chối ở ranh giới environment.
+#
+# Trình tự: build -> assume role `lab-deploy-dev` (OIDC) -> đăng nhập Pulumi Cloud (OIDC) -> preview -> up -> verify.
+# `verify` gửi một message thật vào queue và đợi dòng log {"status":"processed","eventId":...} của Lambda.
+#
+# Chống deploy chồng nhau, hai lớp KHÁC NHAU:
+#   1. concurrency của GitHub (bên dưới): chỉ một run deploy dev chạy tại một thời điểm, KHÔNG huỷ run đang chạy.
+#      Đây không phải hàng đợi: run đang chờ bị thay bằng run mới hơn, nên đừng dựa vào nó để chạy mọi migration theo thứ tự.
+#   2. khoá của backend Pulumi: lớp bảo vệ thật sự, chặn hai `pulumi up` cùng ghi một stack kể cả khi đến từ nơi khác
+#      (máy local, workflow khác). Concurrency của GitHub không thay thế được nó.
+# Mọi workflow khác ghi stack dev phải dùng cùng group `deploy-platform-worker-dev`.
+#
+# Log của repo public: job này chỉ in tên resource và eventId; account ID được mask vì tham chiếu secrets.AWS_ACCOUNT_ID.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: deploy dev
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    concurrency:
+      group: deploy-platform-worker-dev
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: "build: install"
+        working-directory: infra/worker
+        run: npm ci
+      - name: "build: typecheck"
+        working-directory: infra/worker
+        run: npm run typecheck
+      - name: "build: test"
+        working-directory: infra/worker
+        run: npm test
+      - name: "build: handler"
+        working-directory: infra/worker
+        run: npm run build:handler
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ secrets.AWS_ACCOUNT_ID }}
+          role-session-name: lab-deploy-dev-${{ github.run_id }}
+      - name: "auth: assumed role"
+        run: aws sts get-caller-identity --query Arn --output text
+      # Pulumi access token ngắn hạn qua OIDC issuer (policy riêng cho sub của environment `dev`). Action xuất
+      # PULUMI_ACCESS_TOKEN cho các bước sau; các bước Pulumi bên dưới KHÔNG được tự đặt biến đó.
+      - uses: pulumi/auth-actions@273044cc19e63ea565285da8edd4e059126a0bdb # v2.1.2
+        with:
+          organization: ${{ vars.PULUMI_ORG }}
+          requested-token-type: urn:pulumi:token-type:access_token:personal
+          scope: user:${{ vars.PULUMI_USER }}
+          token-expiration: 3000
+
+      - name: preview
+        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
+        with:
+          command: preview
+          stack-name: ${{ vars.PULUMI_STACK_DEV }}
+          work-dir: infra/worker
+          pulumi-version: '3.274.1'
+          diff: true
+          refresh: true
+          comment-on-pr: false
+
+      - name: up
+        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
+        with:
+          command: up
+          stack-name: ${{ vars.PULUMI_STACK_DEV }}
+          work-dir: infra/worker
+          pulumi-version: '3.274.1'
+          refresh: true
+          comment-on-pr: false
+
+      # Smoke test theo Day 2: gửi message hợp lệ với eventId duy nhất, đợi dòng log "processed" của đúng eventId.
+      # --start-time chặn việc một dòng log của run cũ làm test qua nhầm. Trần 120 giây để chừa chỗ cho cold start
+      # và việc event source mapping mới tạo chưa kịp bật; không chỉnh số này để số đo trông đẹp hơn.
+      - name: "verify: smoke test"
+        run: |
+          set -euo pipefail
+          EVENT_ID="ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          QUEUE_URL="$(aws sqs get-queue-url --queue-name platform-worker-dev-queue --query QueueUrl --output text)"
+          START_MS="$(( $(date +%s) * 1000 ))"
+          aws sqs send-message --queue-url "${QUEUE_URL}" \
+            --message-body "{\"eventId\":\"${EVENT_ID}\",\"action\":\"process\",\"forceFail\":false}" \
+            --query MessageId --output text >/dev/null
+          echo "sent eventId=${EVENT_ID}"
+          for i in $(seq 1 24); do
+            OUT="$(aws logs filter-log-events --log-group-name /aws/lambda/platform-worker-dev \
+              --start-time "${START_MS}" --filter-pattern "\"${EVENT_ID}\"" \
+              --query 'events[].message' --output text || true)"
+            if grep -q '"status":"processed"' <<<"${OUT}" && grep -q "${EVENT_ID}" <<<"${OUT}"; then
+              echo "OK: eventId=${EVENT_ID} processed (poll ${i} of 24, 5s apart)"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::eventId=${EVENT_ID} not seen as processed within 120s"
+          exit 1
+
+      # Thời gian lấy từ API (started_at/completed_at của từng bước), không phải mốc tự đặt tay.
+      # Summary chỉ có thời gian: không ghi ARN hay URL vì chúng chứa account ID.
+      - name: timings
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "### Deploy dev: thời gian theo giai đoạn"
+            echo "| Giai đoạn | Giây |"
+            echo "| --- | ---: |"
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs" --jq '
+              [.jobs[] | select(.name == "deploy dev") | .steps[]
+                | select(.started_at != null and .completed_at != null)
+                | select(.name | test("^(build|preview|up|verify)"))
+                | {phase: (.name | split(":")[0]), s: ((.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601))}]
+              | group_by(.phase) | map("| \(.[0].phase) | \(map(.s) | add) |") | .[]'
+          } >> "${GITHUB_STEP_SUMMARY}"
