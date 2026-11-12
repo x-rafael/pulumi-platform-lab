@@ -88,6 +88,7 @@ Account ID không nằm trong repo hay config: lấy lúc chạy từ credential
 | Cú pháp policy | IAM Access Analyzer `validate-policy` | permission policy sạch; xem cảnh báo bên dưới |
 | Không có khoá dài hạn | `gh secret list` ở repo và mọi environment | 0 secret |
 | CI thật: unit + preview, cả AWS lẫn Pulumi Cloud đăng nhập bằng OIDC | PR #1, run 43191003578 | unit 39s, preview 50s; `OIDC token exchange performed successfully`; `+ 11 to create`; không AccessDenied |
+| Policy Pulumi từ chối sub khác (một phần) | `oidc-check.yml` run 43192266735: job không environment so với job `preview`, cùng input | `401 access_denied` cho job không environment; job `preview` nhận token. Sub của `dev`/`prod`/`pr-env` chưa kiểm |
 | Test lỗi làm check đỏ và preview không nhận credentials | PR demo #2 (đã đóng không merge), run 43191426545 | `unit` failure ở bước `worker - test`; `preview` skipped. PR vẫn `MERGEABLE`: check đỏ **không chặn** merge ở gói này |
 
 Bằng chứng nằm ở `keeptrack/Day4/evidence/01…04-*.txt` (ngoài repo, đã che account ID).
@@ -161,10 +162,18 @@ Ghi chú về policy (theo tài liệu Pulumi):
 - Tài liệu không có ví dụ cho sub dạng environment hay dạng immutable `@ID`; giá trị trên là sub thật đã quan sát trong run OIDC của GitHub.
 - Loại token: *Personal* dùng được ở mọi gói; *Organization* (Essentials, Pro, Enterprise) và *Team* (Pro, Enterprise) tuỳ gói. Chưa xác minh gói của tài khoản này.
 
+Kiểm chứng phạm vi policy (run 43192266735, `oidc-check.yml`, cùng action và cùng input, chỉ khác sub):
+
+- Job `environment: preview` **nhận được** token (đối chứng dương).
+- Job **không có environment** (sub `…:ref:refs/heads/chang2-ci`) **bị từ chối**: `Invalid response from token exchange 401: Unauthorized (access_denied: unauthorized)`.
+  Điều này loại trừ policy có sub `*` hoặc `repo:…:*`.
+- **Chưa kiểm:** sub của các environment khác (`dev`, `prod`, `pr-env`) và của repo khác. Một mẫu như `…:environment:*` vẫn chưa bị loại trừ; Chặng 3 sẽ thử
+  job `dev` khi chưa có policy cho `dev` (phải bị từ chối). Policy do chủ org nhập trên giao diện, tôi không đọc lại được: hãy đối chiếu bảng trên với giá trị đã lưu.
+
 Rủi ro còn lại (đã nhỏ hơn token tĩnh, nhưng không bằng không):
 
 - Token *Personal* mang quyền của chính chủ trên **mọi stack trong `x-rafael-org`**, kể cả `platform-ci-bootstrap/lab`. Bù lại nó chỉ sống ~30 phút, chỉ cấp
-  cho job có đúng sub, không có gì dài hạn để lộ hay xoay.
+  cho job khớp policy (ca âm đã kiểm, xem bên dưới), không có gì dài hạn để lộ hay xoay.
 - Policy so khớp theo **environment**, không theo branch. Environment `preview` không giới hạn branch nên job ở bất kỳ branch/PR nào của repo
   tham chiếu `environment: preview` đều nhận được token. Chỉ chủ repo có quyền ghi; PR từ fork không chạy job `preview`.
   Phía AWS vẫn bị chặn bởi role `lab-preview` chỉ đọc.
