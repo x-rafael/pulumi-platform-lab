@@ -60,6 +60,17 @@ jobs:
         working-directory: infra/bootstrap
         run: npm test
 
+      # Scripts: vòng đời PR environment và reaper. Logic quyết định xoá là hàm thuần có test; sửa sai ở đây là xoá nhầm hạ tầng.
+      - name: scripts - install
+        working-directory: scripts
+        run: npm ci
+      - name: scripts - typecheck
+        working-directory: scripts
+        run: npm run typecheck
+      - name: scripts - test
+        working-directory: scripts
+        run: npm test
+
   preview:
     name: preview
     needs: unit
@@ -116,3 +127,64 @@ jobs:
           diff: true
           refresh: true
           comment-on-pr: false
+
+  # PR environment: mỗi PR cùng repo có đúng một stack `pr-<số PR>` (SQS + DLQ + Lambda + log group; không ALB/NAT).
+  # - `needs: unit`: code lỗi test không bao giờ nhận credentials (cùng nguyên tắc với `preview`).
+  # - Chỉ PR cùng repo: PR từ fork không được cấp credentials. Job này CHẠY CODE CỦA PR với role `lab-pr-env`,
+  #   nên ranh giới tin cậy là quyền ghi vào repo (xem docs/ci-access.md).
+  # - Số PR đến từ sự kiện qua biến môi trường, được script kiểm tra là số nguyên dương; không dùng tiêu đề/nội dung PR.
+  # - Concurrency group `pr-platform-worker-<số PR>` dùng chung với workflow dọn dẹp (pr-env-destroy.yml): up và destroy
+  #   của cùng một PR không bao giờ chạy chồng. cancel-in-progress false vì huỷ giữa lúc `up` có thể để thao tác dở.
+  # Môi trường dọn sau khi PR đóng (pr-env-destroy.yml) hoặc khi TTL 24 giờ hết (pr-env-reaper.yml).
+  pr-env:
+    name: pr-env
+    needs: unit
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: pr-env
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: read
+    concurrency:
+      group: pr-platform-worker-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PULUMI_ORG: ${{ vars.PULUMI_ORG }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      # Không có `command` thì pulumi/actions chỉ cài CLI rồi thoát (script gọi `pulumi` trực tiếp).
+      - name: install Pulumi CLI
+        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
+        with:
+          pulumi-version: '3.274.1'
+      - name: worker - install
+        working-directory: infra/worker
+        run: npm ci
+      - name: worker - build handler
+        working-directory: infra/worker
+        run: npm run build:handler
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ secrets.AWS_ACCOUNT_ID }}
+          role-session-name: lab-pr-env-${{ github.run_id }}
+      - uses: pulumi/auth-actions@273044cc19e63ea565285da8edd4e059126a0bdb # v2.1.2
+        with:
+          organization: ${{ vars.PULUMI_ORG }}
+          requested-token-type: urn:pulumi:token-type:access_token:personal
+          scope: user:${{ vars.PULUMI_USER }}
+          token-expiration: 3000
+      - name: pr-env up
+        run: node scripts/pr-env.ts up --pr "${PR_NUMBER}"

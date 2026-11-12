@@ -1,0 +1,69 @@
+name: PR environment reaper
+
+# Dọn các PR environment lỡ (sự kiện đóng PR không chạy, runner lỗi, branch bị xoá) và các PR còn mở nhưng quá TTL 24 giờ.
+#
+# - Lịch (schedule): dọn THẬT. Nếu lịch chỉ chạy thử thì TTL không bao giờ được thực thi.
+#   Lưu ý: lịch này sẽ tiếp tục chạy cho tới khi bị tắt (xoá file hoặc `gh workflow disable`).
+# - Chạy tay (workflow_dispatch): mặc định dry run, chỉ in ra stack nào bị chọn/loại và lý do.
+# - Chỉ xét stack `pr-<n>` có tag khớp (Purpose, ManagedBy, Repository, PR, ExpiresAt); `dev`, `prod`, stack lạ luôn bị loại.
+# - Reaper KHÔNG tự destroy. Nó giao từng PR cho workflow pr-env-destroy.yml để dọn nằm trong đúng concurrency group
+#   của PR đó, rồi workflow đó kiểm lại PR/TTL sau khi có lượt chạy.
+# - Job này chỉ cần Pulumi (liệt kê stack, đọc tag) và GitHub (tra PR, dispatch), không cần credentials AWS.
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Chỉ in ra quyết định, không giao việc dọn nào
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  reap:
+    name: reap
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: pr-env
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: read
+      actions: write
+    concurrency:
+      group: pr-env-reaper
+      cancel-in-progress: false
+    env:
+      PULUMI_ORG: ${{ vars.PULUMI_ORG }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      GH_TOKEN: ${{ github.token }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: install Pulumi CLI
+        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
+        with:
+          pulumi-version: '3.274.1'
+      - uses: pulumi/auth-actions@273044cc19e63ea565285da8edd4e059126a0bdb # v2.1.2
+        with:
+          organization: ${{ vars.PULUMI_ORG }}
+          requested-token-type: urn:pulumi:token-type:access_token:personal
+          scope: user:${{ vars.PULUMI_USER }}
+          token-expiration: 900
+      - name: pr-env reap
+        run: |
+          if [ "${DRY_RUN}" = "true" ]; then
+            node scripts/pr-env.ts reap --dry-run
+          else
+            node scripts/pr-env.ts reap
+          fi

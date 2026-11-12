@@ -1,0 +1,71 @@
+name: PR environment cleanup
+
+# Dọn stack `pr-<n>` khi PR đóng, hoặc khi reaper giao việc (workflow_dispatch) vì TTL hết hạn / sự kiện đóng PR bị lỡ.
+#
+# Mã tin cậy: job checkout `main` để lấy script dọn dẹp, KHÔNG checkout code của PR đã đóng rồi cấp quyền destroy.
+# Số PR lấy từ sự kiện hoặc input; script kiểm tra là số nguyên dương. `pulumi destroy` mặc định không chạy chương trình
+# nên không cần build code PR.
+#
+# Concurrency group TRÙNG với job pr-env của ci.yml (`pr-platform-worker-<số PR>`): up và destroy của cùng PR không chạy chồng.
+# Sau khi có lượt chạy, script kiểm lại trạng thái PR/TTL (PR có thể được mở lại hoặc cập nhật trong lúc chờ) rồi mới xoá.
+on:
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: >-
+          Số PR cần dọn. Script vẫn kiểm lại: chỉ xoá nếu PR đã đóng hoặc TTL đã hết hạn, và tag của stack khớp repo này.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  destroy:
+    name: destroy
+    # PR từ fork không có stack (up không chạy cho fork) nên không cần cấp credentials cho chúng.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: pr-env
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: read
+    concurrency:
+      group: pr-platform-worker-${{ github.event.pull_request.number || inputs.pr }}
+      cancel-in-progress: false
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
+      PULUMI_ORG: ${{ vars.PULUMI_ORG }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: install Pulumi CLI
+        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
+        with:
+          pulumi-version: '3.274.1'
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ secrets.AWS_ACCOUNT_ID }}
+          role-session-name: lab-pr-env-destroy-${{ github.run_id }}
+      - uses: pulumi/auth-actions@273044cc19e63ea565285da8edd4e059126a0bdb # v2.1.2
+        with:
+          organization: ${{ vars.PULUMI_ORG }}
+          requested-token-type: urn:pulumi:token-type:access_token:personal
+          scope: user:${{ vars.PULUMI_USER }}
+          token-expiration: 3000
+      - name: pr-env destroy
+        run: node scripts/pr-env.ts destroy --pr "${PR_NUMBER}"
