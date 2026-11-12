@@ -127,20 +127,43 @@ Khi gặp AccessDenied thật ở Chặng 2–3, thêm một dòng: action thi�
   - Required reviewers của environment `prod` (Chặng 3) có thể gặp cùng giới hạn; kiểm bằng API trước khi tuyên bố gate có tác dụng.
   Các lựa chọn: chuyển repo public sau khi review nội dung, nâng cấp GitHub Pro, hoặc chấp nhận gate chưa thực nghiệm và ghi đúng như vậy.
 
-## Pulumi Cloud token trong CI
+## Đăng nhập Pulumi Cloud từ CI (OIDC, không có secret tĩnh)
 
-Pulumi Cloud xác thực riêng; role AWS ở trên không đăng nhập Pulumi hộ. CI dùng secret `PULUMI_ACCESS_TOKEN`.
+Pulumi Cloud xác thực riêng; role AWS ở trên không đăng nhập Pulumi hộ. CI dùng **OIDC issuer của Pulumi Cloud** thay vì
+`PULUMI_ACCESS_TOKEN` tĩnh:
 
-- **Chỉ ở environment secret của `preview`** (không phải repo secret), nên job `unit` và mọi job không khai `environment: preview` không thấy token.
-- **Rủi ro cần biết:** ở gói hiện tại token là *personal access token*, có quyền của chính chủ trên **mọi stack trong `x-rafael-org`**, kể cả
-  `platform-ci-bootstrap/lab`. Environment `preview` không giới hạn branch, nên bất kỳ branch nào trong repo tham chiếu `environment: preview` đều nhận được token.
-  Chặn hậu quả phía AWS vẫn là role `lab-preview` chỉ đọc; nhưng phía Pulumi thì token không bị thu hẹp. Chỉ chủ repo có quyền ghi, và fork không chạy job `preview`.
-  Muốn thu hẹp: org/team token (tính năng trả phí) hoặc Pulumi OIDC issuer; chưa dùng.
-- **Tạo/xoay:** app.pulumi.com → Settings → Access Tokens → New token (ghi mô tả và đặt hạn dùng). Rồi, ở terminal của bạn (dán token ở prompt, không dán vào chat/log):
+```text
+GitHub job → OIDC token (aud urn:pulumi:org:<org>) → Pulumi Cloud → access token ngắn hạn → pulumi preview
+```
 
-  ```bash
-  gh secret set PULUMI_ACCESS_TOKEN --repo x-rafael/pulumi-platform-lab --env preview
-  gh secret list --repo x-rafael/pulumi-platform-lab --env preview     # chỉ thấy tên và ngày, không thấy giá trị
-  ```
+Workflow dùng `pulumi/auth-actions` (ghim SHA, v2.1.2): action đổi token của GitHub lấy Pulumi access token (yêu cầu 1800 giây,
+server có thể giảm), tự mask và xuất `PULUMI_ACCESS_TOKEN` cho bước sau. Trong GitHub không có secret Pulumi nào; bước
+`pulumi/actions` **không được** tự đặt `PULUMI_ACCESS_TOKEN` (biến rỗng sẽ ghi đè token vừa xuất).
 
-  Xoay token: tạo token mới, `gh secret set` lại, rồi thu hồi token cũ trong Pulumi Cloud.
+Cấu hình một lần ở Pulumi Cloud, do chủ organization làm trên giao diện (Settings → Access Management → OIDC Issuers):
+
+| Mục | Giá trị |
+| --- | --- |
+| Register issuer: Name | `github-actions` |
+| Register issuer: URL | `https://token.actions.githubusercontent.com` |
+| Policy: Decision | Allow |
+| Policy: Token type | Personal |
+| Policy: Scope | `user:x-rafael` |
+| Policy: Aud | `urn:pulumi:org:x-rafael-org` |
+| Policy: Sub | `repo:x-rafael@142369851/pulumi-platform-lab@1454985419:environment:preview` |
+
+Ghi chú về policy (theo tài liệu Pulumi):
+
+- Trong giá trị claim, `*` khớp 0 hoặc nhiều ký tự, `?` khớp 0 hoặc 1, `.` khớp đúng 1 ký tự. Sub ở trên không chứa ký tự đặc biệt nên khớp chính xác.
+- Deny luôn thắng Allow; không có policy Allow nào thì bị từ chối. Mỗi environment sau này (`dev`, `prod`, `pr-env`) cần một policy riêng với sub riêng.
+- Tài liệu không có ví dụ cho sub dạng environment hay dạng immutable `@ID`; giá trị trên là sub thật đã quan sát trong run OIDC của GitHub.
+- Loại token: *Personal* dùng được ở mọi gói; *Organization* (Essentials, Pro, Enterprise) và *Team* (Pro, Enterprise) tuỳ gói. Chưa xác minh gói của tài khoản này.
+
+Rủi ro còn lại (đã nhỏ hơn token tĩnh, nhưng không bằng không):
+
+- Token *Personal* mang quyền của chính chủ trên **mọi stack trong `x-rafael-org`**, kể cả `platform-ci-bootstrap/lab`. Bù lại nó chỉ sống ~30 phút, chỉ cấp
+  cho job có đúng sub, không có gì dài hạn để lộ hay xoay.
+- Policy so khớp theo **environment**, không theo branch. Environment `preview` không giới hạn branch nên job ở bất kỳ branch/PR nào của repo
+  tham chiếu `environment: preview` đều nhận được token. Chỉ chủ repo có quyền ghi; PR từ fork không chạy job `preview`.
+  Phía AWS vẫn bị chặn bởi role `lab-preview` chỉ đọc.
+- Cần Issuer + policy này còn tồn tại; gỡ policy là cắt đường đăng nhập Pulumi của CI.

@@ -96,6 +96,16 @@ jobs:
           role-session-name: lab-preview-${{ github.run_id }}
       - name: Danh tính AWS
         run: aws sts get-caller-identity
+      # Pulumi Cloud xác thực riêng, cũng bằng OIDC: đổi token của GitHub lấy một Pulumi access token
+      # ngắn hạn, không có secret tĩnh nào trong GitHub. Cần issuer GitHub + policy (aud, sub của environment
+      # `preview`) đã đăng ký ở Pulumi Cloud, xem docs/ci-access.md. Action xuất PULUMI_ACCESS_TOKEN cho bước sau
+      # (đã mask); vì vậy bước Pulumi bên dưới KHÔNG được tự đặt PULUMI_ACCESS_TOKEN.
+      - uses: pulumi/auth-actions@273044cc19e63ea565285da8edd4e059126a0bdb # v2.1.2
+        with:
+          organization: ${{ vars.PULUMI_ORG }}
+          requested-token-type: urn:pulumi:token-type:access_token:personal
+          scope: user:${{ vars.PULUMI_USER }}
+          token-expiration: 1800
       # `defaults.run.working-directory` chỉ áp dụng cho `run`; action của Pulumi cần `work-dir` riêng.
       - uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
         with:
@@ -106,5 +116,3 @@ jobs:
           diff: true
           refresh: true
           comment-on-pr: false
-        env:
-          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
