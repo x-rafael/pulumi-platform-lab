@@ -14,6 +14,17 @@ name: OIDC check
 # còn lại: bootstrap `pulumi stack output` và infra/bootstrap/verify-policies.sh).
 on:
   workflow_dispatch:
+    inputs:
+      dev_prod_pulumi:
+        description: >-
+          Kết quả MONG ĐỢI khi environment dev/prod đổi token Pulumi: `denied` khi chưa có policy cho sub của chúng
+          (loại trừ policy dạng ...:environment:*), `allowed` sau khi đã thêm. Lưu ý: khi environment prod đã có
+          required reviewers, job prod sẽ chờ phê duyệt trước khi chạy.
+        type: choice
+        options:
+          - denied
+          - allowed
+        default: denied
 
 permissions:
   contents: read
@@ -167,3 +178,41 @@ jobs:
           fi
           if [ -n "${PULUMI_ACCESS_TOKEN:-}" ]; then echo "::error::token exported despite failure"; exit 1; fi
           echo "OK: denied, no token exported"
+
+  # Pulumi Cloud cho environment dev và prod: dùng lại đúng workflow này trước (denied) và sau (allowed) khi thêm policy.
+  pulumi-dev-prod:
+    name: pulumi login (environment ${{ matrix.environment }}, expect ${{ inputs.dev_prod_pulumi }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [dev, prod]
+    environment: ${{ matrix.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: exchange
+        id: exchange
+        continue-on-error: true
+        uses: pulumi/auth-actions@273044cc19e63ea565285da8edd4e059126a0bdb # v2.1.2
+        with:
+          organization: ${{ vars.PULUMI_ORG }}
+          requested-token-type: urn:pulumi:token-type:access_token:personal
+          scope: user:${{ vars.PULUMI_USER }}
+          token-expiration: 900
+      - name: Kết quả phải đúng kỳ vọng
+        env:
+          OUTCOME: ${{ steps.exchange.outcome }}
+          EXPECT: ${{ inputs.dev_prod_pulumi }}
+        run: |
+          echo "exchange outcome: ${OUTCOME} (expected: ${EXPECT})"
+          case "${EXPECT}:${OUTCOME}" in
+            denied:failure)
+              [ -z "${PULUMI_ACCESS_TOKEN:-}" ] || { echo "::error::token exported despite failure"; exit 1; }
+              echo "OK: denied, no token exported" ;;
+            allowed:success)
+              [ -n "${PULUMI_ACCESS_TOKEN:-}" ] || { echo "::error::no token exported"; exit 1; }
+              echo "OK: allowed, token exported (masked)" ;;
+            *) echo "::error::Unexpected result for ${EXPECT}"; exit 1 ;;
+          esac
