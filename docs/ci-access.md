@@ -98,7 +98,8 @@ trước khi chuyển repo sang public: 6/8 run đầu tiên in ID thật.
 | Deploy dev thật bằng `lab-deploy-dev` + smoke test | `deploy-dev.yml` run 43218214696 (tạo mới), 43219275793 (no-op) | `+ 11 created` (1m24s), smoke `processed` ở poll 3; lần hai `11 unchanged`. Job 156s và 69s |
 | `lab-preview` đủ quyền đọc trên stack có resource thật | PR probe #3 (rỗng, đã đóng), run 43218848378: `preview --refresh` | `11 unchanged`, không AccessDenied; CloudTrail của phiên: 0 lỗi |
 | Cổng phê duyệt environment `prod` | `prod-preview.yml` run 43219292785 | job `waiting`, chưa runner/bước nào chạy; sau khi **owner tự phê duyệt**: assume `lab-deploy-prod`, preview prod `+ 11 to create`. Không phải phê duyệt độc lập |
-| Test lỗi làm check đỏ và preview không nhận credentials | PR demo #2 (đã đóng không merge), run 43191426545 | `unit` failure ở bước `worker - test`; `preview` skipped. PR vẫn `MERGEABLE`: check đỏ **không chặn** merge ở gói này |
+| Test lỗi làm check đỏ và preview không nhận credentials | PR demo #2 (đã đóng không merge), run 43191426545 | `unit` failure ở bước `worker - test`; `preview` skipped. PR vẫn `MERGEABLE` (`UNSTABLE`) vì **lúc đó chưa có ruleset** (repo còn private); xem hàng ngay dưới |
+| Ruleset `protect-main` chặn PR có `unit` đỏ | PR demo #4 (đã đóng không merge), run 43221851554 | `mergeStateStatus: BLOCKED` (trước ruleset là `UNSTABLE`); push thẳng của chủ repo được ghi nhận `bypass` trong rule suite |
 
 Bằng chứng nằm ở `keeptrack/Day4/evidence/01…06-*.txt` (ngoài repo, đã che account ID).
 

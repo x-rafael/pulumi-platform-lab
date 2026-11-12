@@ -11,7 +11,7 @@
 | Workflow `Deploy dev` | **ĐÃ TẮT** (`disabled_manually`) | Rafael | Nó chạy mỗi lần push vào `main`; để bật thì deploy lại dev |
 | Stack `platform-worker/prod` | 0 resource (chỉ config) | Rafael | Chưa từng deploy worker prod |
 | Stack `platform-ci-bootstrap/lab` | 11 resource, `protect: true` | Rafael | OIDC provider + 4 role `lab-*` + 4 inline policy. **Giữ lại** cho Day 5/6 |
-| Reaper theo lịch | **BẬT**, dọn thật mỗi 6 giờ | Rafael | Chỉ xét stack `pr-<n>` có tag khớp; hiện không có stack nào |
+| Reaper theo lịch | **BẬT**, dọn thật mỗi 6 giờ | Rafael | Chỉ xét stack `pr-<n>` có tag khớp; hiện không có stack nào. Chưa có lần chạy tự động nào được quan sát (kiểm: `gh run list --workflow "PR environment reaper" --event schedule`; lúc không có stack `pr-*` thì chỉ loại `dev`/`prod`, không dispatch gì). GitHub tự tắt workflow theo lịch của repo public sau 60 ngày không có hoạt động trong repo, nên "chạy cho tới khi bạn tắt" chỉ đúng khi repo còn được dùng |
 | Pulumi OIDC issuer `github-actions` | 4 policy (`preview`, `dev`, `prod`, `pr-env`) | Rafael | Cấu hình trên giao diện Pulumi Cloud |
 | GitHub | repo public; secret `AWS_ACCOUNT_ID` (để mask log); ruleset `protect-main` (admin bypass); environment `preview`, `dev`, `prod` (reviewer), `pr-env` | Rafael | |
 

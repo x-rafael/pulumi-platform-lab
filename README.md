@@ -62,7 +62,7 @@ Stack `dev`/`test`/`prod` không được mang các key này. PR stack gắn tag
 
 ## Quy ước dọn dẹp (TTL 24 giờ)
 
-PR stack tồn tại tối đa **24 giờ** kể từ lúc tạo (push thêm commit không kéo dài). PR đóng thì stack bị destroy; PR còn mở nhưng quá TTL cũng bị dọn. Tag không tự xoá resource: việc dọn do workflow đóng PR và reaper thực hiện. Reaper chạy **mỗi 6 giờ và dọn thật** cho tới khi bị tắt (`gh workflow disable "PR environment reaper"`). Stack `dev`, `test`, `prod` không bao giờ nằm trong phạm vi reaper. Chi tiết ở [docs/pr-environments.md](docs/pr-environments.md).
+PR stack tồn tại tối đa **24 giờ** kể từ lúc tạo (push thêm commit không kéo dài). PR đóng thì stack bị destroy; PR còn mở nhưng quá TTL cũng bị dọn. Tag không tự xoá resource: việc dọn do workflow đóng PR và reaper thực hiện. Reaper chạy **mỗi 6 giờ và dọn thật** cho tới khi bị tắt (`gh workflow disable "PR environment reaper"`; GitHub cũng tự tắt workflow theo lịch của repo public sau 60 ngày không có hoạt động). Stack `dev`, `test`, `prod` không bao giờ nằm trong phạm vi reaper. Chi tiết ở [docs/pr-environments.md](docs/pr-environments.md).
 
 ## Tình trạng
 
