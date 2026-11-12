@@ -87,8 +87,10 @@ Account ID không nằm trong repo hay config: lấy lúc chạy từ credential
 | Quyền theo phạm vi stack, PassRole, Deny tự-sửa | `verify-policies.sh` (IAM policy simulator), 61 ca dương/âm trên 4 role thật | 61 PASS, 0 FAIL |
 | Cú pháp policy | IAM Access Analyzer `validate-policy` | permission policy sạch; xem cảnh báo bên dưới |
 | Không có khoá dài hạn | `gh secret list` ở repo và mọi environment | 0 secret |
+| CI thật: unit + preview, cả AWS lẫn Pulumi Cloud đăng nhập bằng OIDC | PR #1, run 43191003578 | unit 39s, preview 50s; `OIDC token exchange performed successfully`; `+ 11 to create`; không AccessDenied |
+| Test lỗi làm check đỏ và preview không nhận credentials | PR demo #2 (đã đóng không merge), run 43191426545 | `unit` failure ở bước `worker - test`; `preview` skipped. PR vẫn `MERGEABLE`: check đỏ **không chặn** merge ở gói này |
 
-Bằng chứng nằm ở `keeptrack/Day4/evidence/01…03-*.txt` (ngoài repo, đã che account ID).
+Bằng chứng nằm ở `keeptrack/Day4/evidence/01…04-*.txt` (ngoài repo, đã che account ID).
 
 **Chưa kiểm chứng:** simulator chỉ đánh giá identity policy, không cho biết provider Pulumi thực sự gọi những API nào.
 Quyền deploy đủ hay thiếu chỉ biết khi `pulumi up` chạy trong CI thật (Chặng 2–3). Ca âm dùng STS, vốn trả cùng một thông báo
@@ -97,7 +99,7 @@ cho role *không tồn tại*; chúng chỉ có ý nghĩa vì role đích đã �
 
 ## Nhật ký lỗi và AccessDenied
 
-Chưa có AccessDenied nào từ CI thật (chưa có job deploy). Các phát hiện ở Chặng 1:
+Chưa có AccessDenied nào từ CI thật. Preview của PR #1 chạy sạch, nhưng stack dev đang 0 resource nên preview gần như chỉ mô phỏng create và hầu như không gọi API đọc: **chưa chứng minh `lab-preview` đủ quyền đọc**. Phép thử thật là preview của một PR sau lần deploy dev đầu tiên (Chặng 3). Các phát hiện ở Chặng 1:
 
 | Khi nào | Nguồn | Hiện tượng | Nguyên nhân / xử lý |
 | --- | --- | --- | --- |
