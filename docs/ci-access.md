@@ -93,29 +93,36 @@ trước khi chuyển repo sang public: 6/8 run đầu tiên in ID thật.
 | Cú pháp policy | IAM Access Analyzer `validate-policy` | permission policy sạch; xem cảnh báo bên dưới |
 | Không có khoá dài hạn | `gh secret list` ở repo và mọi environment | chỉ có `AWS_ACCOUNT_ID` (account ID để mask log, không phải credential); không có AWS key, không có Pulumi token |
 | CI thật: unit + preview, cả AWS lẫn Pulumi Cloud đăng nhập bằng OIDC | PR #1, run 43191003578 | unit 39s, preview 50s; `OIDC token exchange performed successfully`; `+ 11 to create`; không AccessDenied |
-| Policy Pulumi từ chối sub khác (một phần) | `oidc-check.yml` run 43192266735: job không environment so với job `preview`, cùng input | `401 access_denied` cho job không environment; job `preview` nhận token. Sub của `dev`/`prod`/`pr-env` chưa kiểm |
+| Policy Pulumi từ chối sub khác (một phần) | `oidc-check.yml` run 43192266735: job không environment so với job `preview`, cùng input | `401 access_denied` cho job không environment; job `preview` nhận token. Sub của `pr-env` và của repo khác chưa kiểm |
+| Policy Pulumi của `dev`/`prod`: từ chối trước, cho phép sau khi thêm policy | `oidc-check.yml` run 43216318729 (`denied`) rồi 43218073008 (`allowed`) | trước: `401 access_denied` cả hai (loại trừ policy dạng `…:environment:*`); sau: nhận token cả hai, job không environment vẫn bị từ chối |
+| Deploy dev thật bằng `lab-deploy-dev` + smoke test | `deploy-dev.yml` run 43218214696 (tạo mới), 43219275793 (no-op) | `+ 11 created` (1m24s), smoke `processed` ở poll 3; lần hai `11 unchanged`. Job 156s và 69s |
+| `lab-preview` đủ quyền đọc trên stack có resource thật | PR probe #3 (rỗng, đã đóng), run 43218848378: `preview --refresh` | `11 unchanged`, không AccessDenied; CloudTrail của phiên: 0 lỗi |
+| Cổng phê duyệt environment `prod` | `prod-preview.yml` run 43219292785 | job `waiting`, chưa runner/bước nào chạy; sau khi **owner tự phê duyệt**: assume `lab-deploy-prod`, preview prod `+ 11 to create`. Không phải phê duyệt độc lập |
 | Test lỗi làm check đỏ và preview không nhận credentials | PR demo #2 (đã đóng không merge), run 43191426545 | `unit` failure ở bước `worker - test`; `preview` skipped. PR vẫn `MERGEABLE`: check đỏ **không chặn** merge ở gói này |
 
-Bằng chứng nằm ở `keeptrack/Day4/evidence/01…04-*.txt` (ngoài repo, đã che account ID).
+Bằng chứng nằm ở `keeptrack/Day4/evidence/01…06-*.txt` (ngoài repo, đã che account ID).
 
 > Các run 43185395051, 43191003578, 43191716209, 43192266735, 43192272296 và 43192438296 được trích dẫn ở trên đã bị **xoá** trước khi chuyển repo sang public, vì log in account ID thật. Kết quả của chúng được lưu ở file bằng chứng nói trên. Run 43212367473 (trên `main`) là bản log đã mask và còn tồn tại.
 
-**Chưa kiểm chứng:** simulator chỉ đánh giá identity policy, không cho biết provider Pulumi thực sự gọi những API nào.
-Quyền deploy đủ hay thiếu chỉ biết khi `pulumi up` chạy trong CI thật (Chặng 2–3). Ca âm dùng STS, vốn trả cùng một thông báo
+**Đã chạy thật ở Chặng 3:** create (đủ 11 resource, gồm PassRole và tag-on-create), refresh, no-op update, smoke test và preview của `lab-preview`.
+**Chưa chạy bằng role CI:** update tại chỗ (`UpdateFunctionCode`, `UpdateFunctionConfiguration`, `SetQueueAttributes`, `UpdateEventSourceMapping`) và **destroy**
+(`DeleteFunction`, `DeleteQueue`, `DeleteLogGroup`, `DeleteRole`, `DeleteRolePolicy`, `DeleteEventSourceMapping`); destroy được thử ở Chặng 4 (`lab-pr-env`).
+Simulator chỉ đánh giá identity policy, không cho biết provider Pulumi thực sự gọi những API nào. Ca âm dùng STS, vốn trả cùng một thông báo
 cho role *không tồn tại*; chúng chỉ có ý nghĩa vì role đích đã được chứng minh tồn tại ở nơi khác
 (ca dương cho `lab-preview`, `03-roles-and-trust.txt` cho các role còn lại).
 
 ## Nhật ký lỗi và AccessDenied
 
-Chưa có AccessDenied nào từ CI thật. Preview của PR #1 chạy sạch, nhưng stack dev đang 0 resource nên preview gần như chỉ mô phỏng create và hầu như không gọi API đọc: **chưa chứng minh `lab-preview` đủ quyền đọc**. Phép thử thật là preview của một PR sau lần deploy dev đầu tiên (Chặng 3). Các phát hiện ở Chặng 1:
+**Chưa có AccessDenied nào từ CI thật** (Chặng 3 đối chiếu bằng CloudTrail: 0 `AccessDenied`/`Unauthorized` ở mọi phiên role CI có dữ liệu), nên Chặng 3 không phải sửa policy bootstrap lần nào. Preview của PR #1 (stack rỗng) không chứng minh được quyền đọc; PR probe #3 trên stack có 11 resource thật mới là phép thử, và nó qua. Các phát hiện:
 
 | Khi nào | Nguồn | Hiện tượng | Nguyên nhân / xử lý |
 | --- | --- | --- | --- |
 | Lần apply đầu | `CreateRole` | `ValidationError` ở `description` | Mô tả chứa ký tự `→` (U+2192); IAM chỉ nhận ASCII và Latin-1. Đổi sang ASCII, thêm test với đúng regex của IAM |
 | Khi chạy simulator | `lambda:CreateEventSourceMapping` | `implicitDeny` dù Resource là ARN mapping + đúng điều kiện | Create không hỗ trợ resource-level (ARN chưa tồn tại lúc tạo). Chuyển sang `Resource: "*"` giữ nguyên điều kiện `lambda:FunctionArn`; `UpdateEventSourceMapping` thì giữ ARN mapping. Simulator xác nhận lại |
 | Khi validate | Access Analyzer, trust policy | Cảnh báo `SPECIFIC_GITHUB_REPO_AND_BRANCH_RECOMMENDED` dù sub không có wildcard | Cùng cảnh báo với cả dạng sub cũ: sub theo environment không chứa tên branch. Ranh giới branch đặt ở deployment branch policy của environment `dev`/`prod` (chỉ `main`), xem bên dưới |
+| Chặng 3, deploy dev #1 (CloudTrail, phiên `lab-deploy-dev-43218214696`) | Lambda `CreateFunction` (4 lần), `CreateEventSourceMapping` (4 lần) | 8 lỗi `InvalidParameterValueException`: "The role defined for the function cannot be assumed by Lambda" và "The function execution role does not have permissions to call ReceiveMessage on SQS" | **Không phải thiếu quyền của role CI**: IAM lan truyền chậm sau khi tạo execution role. Provider tự thử lại và thành công (`up` 1m24s). Không nới policy vì chúng |
 
-Khi gặp AccessDenied thật ở Chặng 2–3, thêm một dòng: action thiếu, resource, vì sao cần, và commit sửa.
+Khi gặp AccessDenied thật, thêm một dòng: action thiếu, resource, vì sao cần, và commit sửa.
 
 ## Giới hạn đã biết
 
@@ -128,12 +135,12 @@ Khi gặp AccessDenied thật ở Chặng 2–3, thêm một dòng: action thi�
 - **Environment là ranh giới, nên phải được bảo vệ.** Workflow ở branch bất kỳ tham chiếu `environment: <tên>` chưa tồn tại sẽ tự tạo
   environment không bảo vệ. Hiện: `dev` và `prod` chỉ cho deploy từ `main`; `preview` không giới hạn branch (role chỉ đọc, dùng cho PR do
   chủ repo kiểm soát); `pr-env` **chưa được tạo**, sẽ tạo với rule phù hợp ở Chặng 4 (đến lúc đó chỉ PR tin cậy trong cùng repo).
-  Required reviewers của `prod` làm ở Chặng 3.
+  `prod` đã có required reviewer (xem mục cổng phê duyệt bên dưới).
 - **Repo public ở tài khoản cá nhân (gói Free), từ 2026-11-12.** Trước đó repo private và API trả 403
   `Upgrade to GitHub Pro or make this repository public to enable this feature.` cho `rulesets` và `branches/main/protection`; một PR có `unit` đỏ vẫn
   `MERGEABLE`. Sau khi public, hai endpoint đó hết 403 (`rulesets` trả `[]`, `main` là `Branch not protected`): **cấu hình được nhưng chưa cấu hình**,
   nên hiện **chưa có required check `unit` và check đỏ vẫn không chặn merge**. Merge queue vẫn không có vì chủ repo là `User`, nên trigger `merge_group`
-  trong `ci.yml` **đã viết, chưa kiểm chứng queue**. Required reviewers của environment `prod` (Chặng 3): kiểm bằng API trước khi tuyên bố gate có tác dụng.
+  trong `ci.yml` **đã viết, chưa kiểm chứng queue**. Required reviewers của environment `prod` **dùng được** trên repo public gói Free (đã cấu hình và chạy ở Chặng 3).
 - **Repo public: Actions log và lịch sử git là công khai.** Đã rà trước khi chuyển: lịch sử git sạch; 6/8 run đầu in account ID thật nên đã xoá, và workflow
   chuyển sang `secrets.AWS_ACCOUNT_ID` để GitHub mask. Phê duyệt workflow cho **mọi** PR từ bên ngoài đã bật (`all_external_contributors`); job `preview`
   vẫn chỉ chạy với PR cùng repo, và trust policy AWS gắn với ID repo nên fork không assume được role. Secret scanning và push protection đã bật.
@@ -163,6 +170,8 @@ Cấu hình một lần ở Pulumi Cloud, do chủ organization làm trên giao 
 | Policy: Aud | `urn:pulumi:org:x-rafael-org` |
 | Policy: Sub | `repo:x-rafael@142369851/pulumi-platform-lab@1454985419:environment:preview` |
 
+Từ Chặng 3 có thêm hai policy y hệt, chỉ khác Sub: `…:environment:dev` (deploy dev) và `…:environment:prod` (cổng prod). Chặng 4 sẽ cần thêm một policy cho `…:environment:pr-env`.
+
 Ghi chú về policy (theo tài liệu Pulumi):
 
 - Trong giá trị claim, `*` khớp 0 hoặc nhiều ký tự, `?` khớp 0 hoặc 1, `.` khớp đúng 1 ký tự. Sub ở trên không chứa ký tự đặc biệt nên khớp chính xác.
@@ -175,8 +184,9 @@ Kiểm chứng phạm vi policy (run 43192266735, `oidc-check.yml`, cùng action
 - Job `environment: preview` **nhận được** token (đối chứng dương).
 - Job **không có environment** (sub `…:ref:refs/heads/chang2-ci`) **bị từ chối**: `Invalid response from token exchange 401: Unauthorized (access_denied: unauthorized)`.
   Điều này loại trừ policy có sub `*` hoặc `repo:…:*`.
-- **Chưa kiểm:** sub của các environment khác (`dev`, `prod`, `pr-env`) và của repo khác. Một mẫu như `…:environment:*` vẫn chưa bị loại trừ; Chặng 3 sẽ thử
-  job `dev` khi chưa có policy cho `dev` (phải bị từ chối). Policy do chủ org nhập trên giao diện, tôi không đọc lại được: hãy đối chiếu bảng trên với giá trị đã lưu.
+- **Đã kiểm ở Chặng 3:** trước khi thêm policy, job `dev` và `prod` đều bị `401 access_denied` (run 43216318729), nên policy `preview` không phải mẫu `…:environment:*`;
+  sau khi thêm, cả hai nhận token (run 43218073008) và job không environment vẫn bị từ chối.
+- **Chưa kiểm:** sub của `pr-env` và của repo khác. Policy do chủ org nhập trên giao diện, tôi không đọc lại được: hãy đối chiếu bảng trên với giá trị đã lưu.
 
 Rủi ro còn lại (đã nhỏ hơn token tĩnh, nhưng không bằng không):
 
@@ -186,3 +196,30 @@ Rủi ro còn lại (đã nhỏ hơn token tĩnh, nhưng không bằng không):
   tham chiếu `environment: preview` đều nhận được token. Chỉ chủ repo có quyền ghi; PR từ fork không chạy job `preview`.
   Phía AWS vẫn bị chặn bởi role `lab-preview` chỉ đọc.
 - Cần Issuer + policy này còn tồn tại; gỡ policy là cắt đường đăng nhập Pulumi của CI.
+
+## Deploy dev, chống chồng deploy và cổng phê duyệt prod
+
+**Deploy dev** (`deploy-dev.yml`, chạy khi push vào `main` hoặc dispatch tay từ `main`): build và test, assume `lab-deploy-dev`, đăng nhập Pulumi bằng OIDC,
+`preview`, `up`, rồi smoke test (gửi một message với eventId duy nhất vào queue và đợi dòng log `"status":"processed"` của đúng eventId, trần 120 giây).
+Lần đầu tạo 11 resource trong 1m24s (job 156s); lần hai là no-op (`11 unchanged`, job 69s). Không đặt timeout nào để làm đẹp số đo.
+
+**Chống chồng deploy: hai lớp khác nhau, lớp này không thay lớp kia.**
+
+1. `concurrency` của GitHub ở cấp job, group `deploy-platform-worker-dev`, `cancel-in-progress: false`: chỉ một run deploy dev chạy tại một thời điểm và run đang `up` không bị huỷ
+   (huỷ giữa chừng có thể để lại thao tác dở). Đây **không phải hàng đợi**: run đang chờ trong group bị thay bằng run mới hơn, nên không dùng nó để đảm bảo mọi
+   migration chạy theo thứ tự. Mọi workflow khác ghi stack dev phải dùng cùng group.
+2. **Khoá của backend Pulumi** là lớp bảo vệ thật sự: hai `pulumi up` cùng ghi một stack bị chặn kể cả khi đến từ máy local hay workflow khác ngoài group.
+   `concurrency` của GitHub không biết gì về các nguồn đó.
+
+**Cổng phê duyệt `prod`** (`prod-preview.yml`, dispatch tay, chỉ `pulumi preview`, chưa deploy worker prod):
+
+- Cấu hình ở Settings (API): required reviewer `x-rafael`, deployment branch chỉ `main`, `can_admins_bypass: false` (mặc định `true` cho phép chủ repo bỏ qua cổng),
+  `prevent_self_review: false`. `environment: prod` trong YAML mới chỉ tham chiếu; quy tắc chặn là cấu hình environment.
+- Đã thực nghiệm (run 43219292785): job đứng `waiting`, chưa gán runner, 0 bước chạy, `pending_deployments` hiện reviewer; sau khi chủ repo bấm Approve trên giao diện,
+  job mới chạy: assume `lab-deploy-prod`, đổi token Pulumi, preview stack prod. Credentials chỉ được cấp sau phê duyệt.
+- **Giới hạn phải nói rõ:** chỉ có một người dùng, nên đây là **owner tự phê duyệt**, không phải phê duyệt độc lập. `prevent_self_review: true` sẽ khoá chết vì run do chính
+  `x-rafael` kích hoạt. Cổng chứng minh cơ chế (dừng trước credentials, cần một hành động có chủ đích), không chứng minh kiểm soát hai người.
+  Chưa thử nhánh Reject và chưa thử dispatch từ branch khác `main` (job có `if: github.ref` và environment có deployment branch rule, chưa chạy thử riêng từng lớp).
+
+**Tài nguyên còn lại sau Chặng 3:** stack dev đang chạy 11 resource thật (Lambda, 2 queue, log group, role, mapping…) để Chặng 4 dùng tiếp. Chủ sở hữu: Rafael. Chi phí gần bằng 0
+khi không có traffic. Dọn ở Chặng 5; destroy bằng role CI chưa từng chạy nên dọn bằng role CI cũng là một phép thử.
