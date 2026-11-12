@@ -17,14 +17,14 @@ on:
     inputs:
       dev_prod_pulumi:
         description: >-
-          Kết quả MONG ĐỢI khi environment dev/prod đổi token Pulumi: `denied` khi chưa có policy cho sub của chúng
-          (loại trừ policy dạng ...:environment:*), `allowed` sau khi đã thêm. Lưu ý: khi environment prod đã có
-          required reviewers, job prod sẽ chờ phê duyệt trước khi chạy.
+          Kết quả MONG ĐỢI khi environment dev/prod đổi token Pulumi. Mặc định `allowed` vì policy của chúng đã tồn tại;
+          chọn `denied` chỉ khi kiểm lại trước lúc thêm policy (loại trừ policy dạng ...:environment:*).
+          LƯU Ý: environment prod có required reviewers nên job prod sẽ đứng chờ phê duyệt ở MỖI lần dispatch.
         type: choice
         options:
-          - denied
           - allowed
-        default: denied
+          - denied
+        default: allowed
 
 permissions:
   contents: read
