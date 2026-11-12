@@ -74,6 +74,7 @@ function logFailure(record: SQSRecord, eventId: string | undefined, error: unkno
       messageId: record.messageId,
       receiveCount: record.attributes?.ApproximateReceiveCount,
       bodyLength: record.body.length,
+      revision: "pr-env-update-test",
       error: error instanceof Error ? error.message : String(error),
     }),
   );
