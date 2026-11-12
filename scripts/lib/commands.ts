@@ -1,4 +1,4 @@
-import { checkPrResources, smokeTest } from "./aws.ts";
+import { checkPrResources, checkStackResources, smokeTest } from "./aws.ts";
 import type { Runner } from "./exec.ts";
 import { dispatchDestroy, fetchPr } from "./github.ts";
 import {
@@ -7,8 +7,8 @@ import {
 } from "./pulumi.ts";
 import { type Decision, decideReap } from "./reaper.ts";
 import {
-  PROJECT, PURPOSE_TAG_VALUE, computeExpiresAt, fullStackName, parseExpiresAt, physicalNames, prNumberFromStackName,
-  prStackName,
+  PROJECT, PURPOSE_TAG_VALUE, computeExpiresAt, fullStackName, fullStackNameFor, parseExpiresAt, physicalNames,
+  prNumberFromStackName, prStackName,
 } from "./validate.ts";
 
 export interface Env {
@@ -225,4 +225,24 @@ export function reap(deps: Deps, dryRun: boolean): number {
       `\n\nWould clean: ${toClean.length}${dryRun ? "" : `, dispatched: ${dispatched.length}`}.\n`,
   );
   return errors > 0 ? 1 : 0;
+}
+
+/**
+ * Xác nhận một stack đã dọn sạch: stack còn tồn tại nhưng có 0 resource trên Pulumi, và AWS không còn function, 2 queue,
+ * log group, role của nó. Chỉ đọc. Dùng sau khi destroy `dev`/`prod`/`pr-<n>`; lỗi không phân loại được (AccessDenied…) thì ném,
+ * không bị coi là "đã xoá".
+ */
+export function verifyEmpty(deps: Deps, stack: string): number {
+  const { env, log } = deps;
+  const ctx = ctxOf(deps);
+  const full = fullStackNameFor(env.org, stack);
+  if (!stackExists(listStacks(ctx), ctx, stack)) {
+    log(`ERROR: stack ${stack} does not exist, so Pulumi cannot confirm it is empty`);
+    return 1;
+  }
+  const remaining = exportResourceCount(ctx, full);
+  const present = checkStackResources(stack, deps.runner).filter((r) => r.presence === "present");
+  log(`Stack ${stack}: ${remaining} resources on Pulumi; still on AWS: ${present.length === 0 ? "none" : present.map((p) => `${p.kind}:${p.name}`).join(", ")}`);
+  deps.summary(`### Verify empty: \`${stack}\`\n| Check | Result |\n| --- | --- |\n| Resources in the Pulumi stack | ${remaining} |\n| Resources still on AWS | ${present.length} |\n`);
+  return remaining === 0 && present.length === 0 ? 0 : 1;
 }

@@ -4,6 +4,7 @@
  *   node scripts/pr-env.ts up --pr 12 [--expires-at <ISO-8601 UTC>]
  *   node scripts/pr-env.ts destroy --pr 12
  *   node scripts/pr-env.ts reap [--dry-run]
+ *   node scripts/pr-env.ts verify-empty --stack dev|prod|pr-<n>     (chỉ đọc; xác nhận đã dọn sạch)
  *
  * Biến môi trường: PULUMI_ORG (allowlist), GITHUB_REPOSITORY (allowlist), AWS_REGION (mặc định ap-southeast-1),
  * GH_TOKEN (gh), GITHUB_RUN_ID/GITHUB_RUN_ATTEMPT (đặt eventId), GITHUB_STEP_SUMMARY (tuỳ chọn).
@@ -13,14 +14,15 @@
 import { appendFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { type Deps, type Env, destroy, reap, up } from "./lib/commands.ts";
+import { type Deps, type Env, destroy, reap, up, verifyEmpty } from "./lib/commands.ts";
 import { run } from "./lib/exec.ts";
-import { parsePrNumber, requireOrg, requireRegion, requireRepository } from "./lib/validate.ts";
+import { parseKnownStackName, parsePrNumber, requireOrg, requireRegion, requireRepository } from "./lib/validate.ts";
 
 const USAGE = `usage:
   pr-env up --pr <n> [--expires-at <ISO-8601 UTC>]
   pr-env destroy --pr <n>
-  pr-env reap [--dry-run]`;
+  pr-env reap [--dry-run]
+  pr-env verify-empty --stack <dev|prod|pr-n>`;
 
 function loadEnv(): Env {
   return {
@@ -61,6 +63,7 @@ function main(argv: string[]): number {
     strict: true,
     options: {
       pr: { type: "string" },
+      stack: { type: "string" },
       "expires-at": { type: "string" },
       "dry-run": { type: "boolean" },
     },
@@ -79,6 +82,8 @@ function main(argv: string[]): number {
     }
     case "reap":
       return reap(buildDeps(loadEnv()), values["dry-run"] === true);
+    case "verify-empty":
+      return verifyEmpty(buildDeps(loadEnv()), parseKnownStackName(values.stack));
     default:
       console.error(USAGE);
       return 2;

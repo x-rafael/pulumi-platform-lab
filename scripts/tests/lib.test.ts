@@ -214,3 +214,27 @@ describe("Pulumi parsing", () => {
     expect(() => stackExists([{ name: "pr-12", url: "https://app.pulumi.com/other-org/platform-worker/pr-12" }], ctx, "pr-12")).toThrow("unexpected URL");
   });
 });
+
+describe("tên stack được phép kiểm tra (dev, prod, pr-<n>)", () => {
+  test("parseKnownStackName chỉ nhận dev, prod, pr-<n>", async () => {
+    const { parseKnownStackName } = await import("../lib/validate.ts");
+    for (const ok of ["dev", "prod", "pr-12"]) expect(parseKnownStackName(ok)).toBe(ok);
+    for (const bad of [undefined, "", "test", "staging", "Dev", "pr-0", "pr-012", "dev/../prod", "constructor", "pr-12; rm"]) {
+      expect(() => parseKnownStackName(bad), String(bad)).toThrow("Unknown stack");
+    }
+  });
+  test("physicalNamesForStack: dev và prod dùng đúng mẫu tên của worker", async () => {
+    const { physicalNamesForStack, fullStackNameFor } = await import("../lib/validate.ts");
+    expect(physicalNamesForStack("dev")).toEqual({
+      functionName: "platform-worker-dev",
+      sourceQueue: "platform-worker-dev-queue",
+      dlq: "platform-worker-dev-dlq",
+      logGroup: "/aws/lambda/platform-worker-dev",
+      role: "platform-worker-dev-role",
+    });
+    expect(physicalNamesForStack("prod").role).toBe("platform-worker-prod-role");
+    expect(fullStackNameFor(ORG, "dev")).toBe("x-rafael-org/platform-worker/dev");
+    expect(() => fullStackNameFor("evil-org", "dev")).toThrow("not in the allowlist");
+    expect(() => physicalNamesForStack("staging")).toThrow("Unknown stack");
+  });
+});

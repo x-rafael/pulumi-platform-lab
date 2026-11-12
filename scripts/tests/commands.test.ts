@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { destroy, reap, up } from "../lib/commands.ts";
+import { destroy, reap, up, verifyEmpty } from "../lib/commands.ts";
 import {
   NOW, ORG, REPO, type Responder, awsAllAbsent, fakeRunner, goodTags, makeDeps, on, prJson, stackListJson, tagsJson,
 } from "./helpers.ts";
@@ -258,5 +258,37 @@ describe("reap", () => {
 
   test("dùng giờ UTC từ deps.now, không phụ thuộc đồng hồ máy", () => {
     expect(NOW.toISOString()).toBe("2026-11-12T12:00:00.000Z");
+  });
+});
+
+describe("verifyEmpty", () => {
+  const dev = { stacks: ["dev", "prod"] };
+
+  test("stack có 0 resource và AWS không còn gì → 0, và chỉ có lệnh đọc", () => {
+    const { runner, calls } = world(dev);
+    expect(verifyEmpty(makeDeps(runner), "dev")).toBe(0);
+    expect(calls.some((c) => /destroy|stack rm|stack init|\bup\b|config set|tag set/.test(c.text))).toBe(false);
+    // kiểm đúng tên của dev, không phải của PR nào
+    expect(calls.some((c) => c.text.includes("--function-name platform-worker-dev"))).toBe(true);
+  });
+
+  test("stack còn resource trên Pulumi → 1", () => {
+    const { runner } = world({ ...dev, exportedResources: 3 });
+    expect(verifyEmpty(makeDeps(runner), "dev")).toBe(1);
+  });
+
+  test("AWS còn Lambda → 1", () => {
+    const { runner } = world({ ...dev, extra: [on("aws lambda get-function", { status: 0, stdout: "{}" })] });
+    expect(verifyEmpty(makeDeps(runner), "dev")).toBe(1);
+  });
+
+  test("AccessDenied khi kiểm AWS → ném lỗi (không coi là đã xoá)", () => {
+    const { runner } = world({ ...dev, extra: [on("aws iam get-role", { status: 254, stderr: "(AccessDenied)" })] });
+    expect(() => verifyEmpty(makeDeps(runner), "dev")).toThrow("Cannot determine");
+  });
+
+  test("stack không tồn tại → 1 (Pulumi không thể xác nhận là rỗng)", () => {
+    const { runner } = world({ stacks: ["prod"] });
+    expect(verifyEmpty(makeDeps(runner), "dev")).toBe(1);
   });
 });

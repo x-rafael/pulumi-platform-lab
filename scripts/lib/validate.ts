@@ -92,9 +92,20 @@ export function fullStackName(org: string, pr: number): string {
   return `${requireOrg(org)}/${PROJECT}/${prStackName(pr)}`;
 }
 
-/** Tên vật lý mà worker tạo cho một PR stack (xem infra/worker/components/LambdaWorker.ts). */
-export function physicalNames(pr: number) {
-  const base = `${SERVICE_PREFIX}-${prStackName(pr)}`;
+/** Tên stack mà script biết kiểm tra: `dev`, `prod` hoặc `pr-<n>`. Mọi tên khác bị từ chối. */
+export function parseKnownStackName(name: string | undefined): string {
+  if (name === "dev" || name === "prod" || (name !== undefined && prNumberFromStackName(name) !== undefined)) return name;
+  throw new Error(`Unknown stack ${JSON.stringify(name)}: expected dev, prod or pr-<positive integer>`);
+}
+
+/** Tên stack đầy đủ cho dev/prod/pr-<n> (đã qua allowlist org). */
+export function fullStackNameFor(org: string, stack: string): string {
+  return `${requireOrg(org)}/${PROJECT}/${parseKnownStackName(stack)}`;
+}
+
+/** Tên vật lý mà worker tạo cho một stack (xem infra/worker/components/LambdaWorker.ts). */
+export function physicalNamesForStack(stack: string) {
+  const base = `${SERVICE_PREFIX}-${parseKnownStackName(stack)}`;
   return {
     functionName: base,
     sourceQueue: `${base}-queue`,
@@ -103,3 +114,6 @@ export function physicalNames(pr: number) {
     role: `${base}-role`,
   };
 }
+
+/** Tên vật lý mà worker tạo cho một PR stack. */
+export const physicalNames = (pr: number) => physicalNamesForStack(prStackName(pr));

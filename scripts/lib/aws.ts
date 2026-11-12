@@ -1,5 +1,5 @@
 import { type Runner, type RunResult, runOrThrow } from "./exec.ts";
-import { physicalNames } from "./validate.ts";
+import { physicalNamesForStack, prStackName } from "./validate.ts";
 
 export type ResourceKind = "lambda" | "sqs" | "logs" | "iam";
 export type Presence = "present" | "absent";
@@ -39,8 +39,8 @@ interface Lookup {
   args: string[];
 }
 
-export function lookupsFor(pr: number): Lookup[] {
-  const n = physicalNames(pr);
+export function lookupsFor(stack: string): Lookup[] {
+  const n = physicalNamesForStack(stack);
   return [
     { kind: "lambda", name: n.functionName, args: ["lambda", "get-function", "--function-name", n.functionName] },
     { kind: "sqs", name: n.sourceQueue, args: ["sqs", "get-queue-url", "--queue-name", n.sourceQueue] },
@@ -63,13 +63,17 @@ export interface PresenceReport {
   presence: Presence;
 }
 
-/** Hỏi AWS (bằng role của CI) xem 5 resource của PR còn không. Ném nếu có lỗi không phân loại được. */
-export function checkPrResources(pr: number, runner: Runner): PresenceReport[] {
-  return lookupsFor(pr).map(({ kind, name, args }) => {
+/** Hỏi AWS (bằng role của CI) xem 5 resource của một stack còn không. Ném nếu có lỗi không phân loại được. */
+export function checkStackResources(stack: string, runner: Runner): PresenceReport[] {
+  return lookupsFor(stack).map(({ kind, name, args }) => {
     const result = runner("aws", [...args, "--no-cli-pager"], { env: { AWS_PAGER: "" } });
     return { kind, name, presence: classifyLookup(kind, name, result) };
   });
 }
+
+/** Như `checkStackResources` cho stack PR `pr-<n>`. */
+export const checkPrResources = (pr: number, runner: Runner): PresenceReport[] =>
+  checkStackResources(prStackName(pr), runner);
 
 /** Dòng log của handler: {"status":"processed","eventId":"...","messageId":"..."} */
 export function isProcessed(logText: string, eventId: string): boolean {
@@ -90,7 +94,7 @@ export interface SmokeDeps {
  */
 export function smokeTest(pr: number, eventId: string, deps: SmokeDeps): number {
   const { runner, sleep, nowMs, attempts = 24, intervalMs = 5000 } = deps;
-  const n = physicalNames(pr);
+  const n = physicalNamesForStack(prStackName(pr));
   const queueUrl = runOrThrow(runner, "aws", [
     "sqs", "get-queue-url", "--queue-name", n.sourceQueue, "--query", "QueueUrl", "--output", "text",
   ]).stdout.trim();

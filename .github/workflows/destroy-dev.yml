@@ -1,0 +1,69 @@
+name: Destroy dev (manual cleanup)
+
+# Dọn stack dev bằng chính role CI `lab-deploy-dev` (chạy tay, chỉ từ main). Stack `dev` vẫn được GIỮ (rỗng, còn config và tag)
+# để bật lại `Deploy dev` là deploy lại được.
+#
+# Workflow `Deploy dev` chạy MỖI LẦN push vào main: sau khi destroy, phải tắt nó (`gh workflow disable "Deploy dev"`),
+# nếu không push kế tiếp sẽ tạo lại các resource vừa xoá.
+#
+# - Cùng concurrency group `deploy-platform-worker-dev` với deploy-dev.yml: destroy và deploy không bao giờ chạy chồng.
+# - `pulumi destroy --refresh` (không --force): đọc lại thực tế trước khi xoá nên thử lại là idempotent.
+# - Cuối cùng `verify-empty`: Pulumi có 0 resource VÀ AWS không còn function/2 queue/log group/role; chỉ các mã "không tồn tại" thật
+#   mới tính là đã xoá (AccessDenied hay lỗi mạng làm bước này thất bại).
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Gõ đúng `dev` để xác nhận xoá toàn bộ resource của stack dev
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  destroy:
+    name: destroy dev
+    if: github.ref == 'refs/heads/main' && inputs.confirm == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: deploy-platform-worker-dev
+      cancel-in-progress: false
+    env:
+      PULUMI_ORG: ${{ vars.PULUMI_ORG }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      PULUMI_STACK: ${{ vars.PULUMI_STACK_DEV }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: install Pulumi CLI
+        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
+        with:
+          pulumi-version: '3.274.1'
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ secrets.AWS_ACCOUNT_ID }}
+          role-session-name: lab-deploy-dev-destroy-${{ github.run_id }}
+      - uses: pulumi/auth-actions@273044cc19e63ea565285da8edd4e059126a0bdb # v2.1.2
+        with:
+          organization: ${{ vars.PULUMI_ORG }}
+          requested-token-type: urn:pulumi:token-type:access_token:personal
+          scope: user:${{ vars.PULUMI_USER }}
+          token-expiration: 3000
+      - name: destroy
+        working-directory: infra/worker
+        run: pulumi destroy --stack "${PULUMI_STACK}" --yes --refresh --non-interactive
+      - name: verify empty
+        run: node scripts/pr-env.ts verify-empty --stack dev
