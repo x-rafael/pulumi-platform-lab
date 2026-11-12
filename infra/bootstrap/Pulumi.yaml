@@ -1,0 +1,6 @@
+name: platform-ci-bootstrap
+description: GitHub Actions OIDC provider and CI roles for the platform lab (sandbox; applied locally by an admin, never by CI)
+runtime:
+  name: nodejs
+  options:
+    packagemanager: npm

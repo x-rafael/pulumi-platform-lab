@@ -1,0 +1,120 @@
+name: OIDC check
+
+# Chặng 1 (Checkpoint 1): chứng minh job GitHub nhận credentials AWS ngắn hạn qua OIDC, không dùng access key,
+# và trust policy từ chối đúng các job không được phép. Chạy tay: Actions -> "OIDC check" -> Run workflow.
+#
+# - Job "allowed": environment preview assume lab-preview, in ra danh tính; sau đó thử assume các role khác
+#   bằng cùng token và phải bị từ chối.
+# - Job "no-environment": job không có environment (sub là ref:refs/heads/main) thử assume lab-preview và phải bị từ chối.
+#
+# Ca âm gọi thẳng `aws sts assume-role-with-web-identity` và khẳng định đúng thông báo
+# "Not authorized to perform sts:AssumeRoleWithWebIdentity". Nếu chỉ kiểm "lệnh lỗi" thì biến rỗng hay
+# ARN gõ sai cũng "pass" giả. Lưu ý: STS trả cùng thông báo cho role không tồn tại, nên ca âm chỉ có ý nghĩa
+# khi role đích đã được chứng minh tồn tại ở nơi khác (lab-preview: ca dương của chính workflow này; các role
+# còn lại: bootstrap `pulumi stack output` và infra/bootstrap/verify-policies.sh).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  allowed:
+    name: allowed (environment preview)
+    runs-on: ubuntu-latest
+    environment: preview
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+    steps:
+      - name: OIDC claims (chỉ iss, aud, sub, environment, ref; token được mask)
+        run: |
+          set -euo pipefail
+          TOKEN="$(curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r .value)"
+          echo "::add-mask::${TOKEN}"
+          echo "${TOKEN}" | jq -R 'split(".")[1] | gsub("-";"+") | gsub("_";"/") | @base64d | fromjson
+            | {iss, aud, sub, environment, ref}'
+
+      - name: Assume lab-preview bằng OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          role-session-name: oidc-check-${{ github.run_id }}
+
+      - name: Danh tính phải là đúng role và đúng account
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity
+          ARN="$(aws sts get-caller-identity --query Arn --output text)"
+          EXPECTED="arn:aws:sts::${AWS_ACCOUNT_ID}:assumed-role/lab-preview/"
+          case "${ARN}" in
+            "${EXPECTED}"*) echo "OK: ${ARN%%/oidc-check-*}/…" ;;
+            *) echo "::error::Unexpected identity"; exit 1 ;;
+          esac
+          if env | grep -qE '^AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)=' && [ -z "${AWS_SESSION_TOKEN:-}" ]; then
+            echo "::error::Long-lived-looking credentials (no session token)"; exit 1
+          fi
+          echo "Session credentials have a session token (temporary)."
+
+      - name: Ca âm - sub environment:preview không được assume các role khác
+        run: |
+          set -euo pipefail
+          unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+          TOKEN="$(curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r .value)"
+          echo "::add-mask::${TOKEN}"
+          expect_denied() {
+            local out
+            if out="$(aws sts assume-role-with-web-identity --no-sign-request --role-arn "$1" \
+                --role-session-name "oidc-negative-${GITHUB_RUN_ID}" --web-identity-token "${TOKEN}" 2>&1)"; then
+              echo "::error::UNEXPECTED SUCCESS assuming $1"; exit 1
+            fi
+            if grep -q "Not authorized to perform sts:AssumeRoleWithWebIdentity" <<<"${out}"; then
+              echo "OK denied by trust policy: ${1##*/}"
+            else
+              echo "::error::Denied for a different reason: ${1##*/}"; echo "${out}" | head -3; exit 1
+            fi
+          }
+          for r in lab-deploy-dev lab-deploy-prod lab-pr-env; do
+            expect_denied "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${r}"
+          done
+
+  no-environment:
+    name: denied (no environment)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+    steps:
+      - name: Ca âm - job không có environment không được assume role nào
+        run: |
+          set -euo pipefail
+          TOKEN="$(curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r .value)"
+          echo "::add-mask::${TOKEN}"
+          echo "${TOKEN}" | jq -R 'split(".")[1] | gsub("-";"+") | gsub("_";"/") | @base64d | fromjson
+            | {iss, aud, sub, environment, ref}'
+          expect_denied() {
+            local out
+            if out="$(aws sts assume-role-with-web-identity --no-sign-request --role-arn "$1" \
+                --role-session-name "oidc-negative-${GITHUB_RUN_ID}" --web-identity-token "${TOKEN}" 2>&1)"; then
+              echo "::error::UNEXPECTED SUCCESS assuming $1"; exit 1
+            fi
+            if grep -q "Not authorized to perform sts:AssumeRoleWithWebIdentity" <<<"${out}"; then
+              echo "OK denied by trust policy: ${1##*/}"
+            else
+              echo "::error::Denied for a different reason: ${1##*/}"; echo "${out}" | head -3; exit 1
+            fi
+          }
+          for r in lab-preview lab-deploy-dev lab-deploy-prod lab-pr-env; do
+            expect_denied "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${r}"
+          done
