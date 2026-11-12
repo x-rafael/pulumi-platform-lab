@@ -127,13 +127,14 @@ Khi gặp AccessDenied thật ở Chặng 2–3, thêm một dòng: action thi�
   environment không bảo vệ. Hiện: `dev` và `prod` chỉ cho deploy từ `main`; `preview` không giới hạn branch (role chỉ đọc, dùng cho PR do
   chủ repo kiểm soát); `pr-env` **chưa được tạo**, sẽ tạo với rule phù hợp ở Chặng 4 (đến lúc đó chỉ PR tin cậy trong cùng repo).
   Required reviewers của `prod` làm ở Chặng 3.
-- **Repo private ở tài khoản cá nhân (gói Free):** tạo Environment và branch policy của environment được (đã kiểm). Đã kiểm bằng API ngày 2026-11-12:
-  - `GET /repos/x-rafael/pulumi-platform-lab/rulesets` và `/branches/main/protection` đều trả 403
-    `Upgrade to GitHub Pro or make this repository public to enable this feature.` Nên **không đặt được required check `unit`**
-    và một check đỏ **không chặn** được merge (chỉ là tín hiệu cho người merge).
-  - Merge queue chỉ có với repo thuộc organization (chủ repo ở đây là `User`), nên trigger `merge_group` trong `ci.yml` **đã viết, chưa kiểm chứng queue**.
-  - Required reviewers của environment `prod` (Chặng 3) có thể gặp cùng giới hạn; kiểm bằng API trước khi tuyên bố gate có tác dụng.
-  Các lựa chọn: chuyển repo public sau khi review nội dung, nâng cấp GitHub Pro, hoặc chấp nhận gate chưa thực nghiệm và ghi đúng như vậy.
+- **Repo public ở tài khoản cá nhân (gói Free), từ 2026-11-12.** Trước đó repo private và API trả 403
+  `Upgrade to GitHub Pro or make this repository public to enable this feature.` cho `rulesets` và `branches/main/protection`; một PR có `unit` đỏ vẫn
+  `MERGEABLE`. Sau khi public, hai endpoint đó hết 403 (`rulesets` trả `[]`, `main` là `Branch not protected`): **cấu hình được nhưng chưa cấu hình**,
+  nên hiện **chưa có required check `unit` và check đỏ vẫn không chặn merge**. Merge queue vẫn không có vì chủ repo là `User`, nên trigger `merge_group`
+  trong `ci.yml` **đã viết, chưa kiểm chứng queue**. Required reviewers của environment `prod` (Chặng 3): kiểm bằng API trước khi tuyên bố gate có tác dụng.
+- **Repo public: Actions log và lịch sử git là công khai.** Đã rà trước khi chuyển: lịch sử git sạch; 6/8 run đầu in account ID thật nên đã xoá, và workflow
+  chuyển sang `secrets.AWS_ACCOUNT_ID` để GitHub mask. Phê duyệt workflow cho **mọi** PR từ bên ngoài đã bật (`all_external_contributors`); job `preview`
+  vẫn chỉ chạy với PR cùng repo, và trust policy AWS gắn với ID repo nên fork không assume được role. Secret scanning và push protection đã bật.
 
 ## Đăng nhập Pulumi Cloud từ CI (OIDC, không có secret tĩnh)
 
