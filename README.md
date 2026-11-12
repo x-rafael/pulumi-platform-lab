@@ -15,6 +15,7 @@ infra/worker/        # Pulumi project `platform-worker`: components/, handlers/,
 infra/bootstrap/     # Pulumi project `platform-ci-bootstrap`: OIDC provider + role CI (chỉ admin chạy ở máy local)
 docs/ci-access.md    # CI truy cập AWS thế nào: trust/permission, bằng chứng kiểm chứng, nhật ký AccessDenied, giới hạn đã biết
 docs/pr-environments.md  # PR environment: vòng đời, quy tắc an toàn, bảng quyết định của reaper, bằng chứng
+docs/runbook.md      # Vận hành: đang chạy gì, ai sở hữu, lệnh thường dùng, xử lý sự cố, thứ tự gỡ hoàn toàn
 docs/migration/      # Runbook/bằng chứng migration, chỉ đưa vào sau khi đã kiểm tra nội dung
 scripts/             # pr-env.ts: vòng đời PR environment (up, destroy) và reaper; logic quyết định là hàm thuần có test
 ```
@@ -69,4 +70,4 @@ PR stack tồn tại tối đa **24 giờ** kể từ lúc tạo (push thêm com
   deploy stack `dev` khi push vào `main` kèm smoke test; cổng phê duyệt cho environment `prod` (chỉ preview); **PR environment** (tạo, cập nhật, xoá khi đóng PR) và **reaper TTL 24 giờ**,
   đều có bằng chứng chạy thật. Xem [docs/ci-access.md](docs/ci-access.md) và [docs/pr-environments.md](docs/pr-environments.md).
 - Giới hạn đã biết: chỉ có một người dùng nên cổng `prod` là owner tự phê duyệt; ruleset `main` bắt buộc check `unit` nhưng chủ repo được bypass; không có merge queue (repo thuộc tài khoản cá nhân).
-- Stack `dev` đang chạy 11 resource thật (sandbox); dọn ở bước cuối.
+- Đã dọn dẹp (2026-11-12): stack `dev` đã destroy bằng role CI và xác nhận rỗng; workflow `Deploy dev` **đang tắt** (bật lại bằng `gh workflow enable "Deploy dev"`). Còn lại có chủ đích: bootstrap OIDC/roles (owner Rafael) và reaper theo lịch. Xem [docs/runbook.md](docs/runbook.md).

@@ -105,8 +105,9 @@ Bằng chứng nằm ở `keeptrack/Day4/evidence/01…06-*.txt` (ngoài repo, �
 > Các run 43185395051, 43191003578, 43191716209, 43192266735, 43192272296 và 43192438296 được trích dẫn ở trên đã bị **xoá** trước khi chuyển repo sang public, vì log in account ID thật. Kết quả của chúng được lưu ở file bằng chứng nói trên. Run 43212367473 (trên `main`) là bản log đã mask và còn tồn tại.
 
 **Đã chạy thật bằng role CI:** create (đủ 11 resource, gồm PassRole và tag-on-create), refresh, no-op update, smoke test, preview của `lab-preview` (Chặng 3);
-update tại chỗ (`UpdateFunctionCode`) và **destroy** của PR environment bằng `lab-pr-env` (Chặng 4, xem nhật ký lỗi bên dưới: destroy lộ ra hai AccessDenied thật).
-**Chưa chạy bằng role CI:** `UpdateFunctionConfiguration`, `SetQueueAttributes`, `UpdateEventSourceMapping` (chưa có thay đổi nào kích hoạt chúng), và destroy của stack `dev`/`prod` bằng `lab-deploy-dev`/`lab-deploy-prod`.
+update tại chỗ (`UpdateFunctionCode`) và **destroy** của PR environment bằng `lab-pr-env` (Chặng 4, xem nhật ký lỗi bên dưới: lộ ra hai AccessDenied thật);
+**destroy stack `dev` bằng `lab-deploy-dev`** (Chặng 5, run 43236760712: `11 deleted`, 0 AccessDenied trong CloudTrail của phiên).
+**Chưa chạy bằng role CI:** `UpdateFunctionConfiguration`, `SetQueueAttributes`, `UpdateEventSourceMapping` (chưa có thay đổi nào kích hoạt chúng), và destroy của `prod` bằng `lab-deploy-prod` (stack prod chưa từng có resource).
 Simulator chỉ đánh giá identity policy, không cho biết provider Pulumi thực sự gọi những API nào. Ca âm dùng STS, vốn trả cùng một thông báo
 cho role *không tồn tại*; chúng chỉ có ý nghĩa vì role đích đã được chứng minh tồn tại ở nơi khác
 (ca dương cho `lab-preview`, `03-roles-and-trust.txt` cho các role còn lại).
@@ -233,5 +234,6 @@ Lưu ý khi dùng `oidc-check.yml`: input `env_pulumi` mặc định `allowed` (
   `x-rafael` kích hoạt. Cổng chứng minh cơ chế (dừng trước credentials, cần một hành động có chủ đích), không chứng minh kiểm soát hai người.
   Chưa thử nhánh Reject và chưa thử dispatch từ branch khác `main` (job có `if: github.ref` và environment có deployment branch rule, chưa chạy thử riêng từng lớp).
 
-**Tài nguyên còn lại sau Chặng 3:** stack dev đang chạy 11 resource thật (Lambda, 2 queue, log group, role, mapping…) để Chặng 4 dùng tiếp. Chủ sở hữu: Rafael. Chi phí gần bằng 0
-khi không có traffic. Dọn ở Chặng 5; destroy bằng role CI chưa từng chạy nên dọn bằng role CI cũng là một phép thử.
+**Tài nguyên sau khi dọn dẹp (Chặng 5):** stack `dev` đã được destroy bằng role CI (`destroy-dev.yml`, tự gõ `dev` để xác nhận, cùng concurrency group với deploy) và xác nhận rỗng:
+Pulumi có 0 resource, AWS không còn function, 2 queue, log group, role; quét cả account không còn gì của worker. Stack `dev` được giữ (rỗng). Workflow `Deploy dev` đã **tắt**
+vì nó chạy mỗi lần push vào `main` và sẽ tạo lại các resource vừa xoá; bật lại bằng `gh workflow enable "Deploy dev"`. Bootstrap OIDC/roles được giữ có chủ đích (owner Rafael). Xem [runbook.md](runbook.md).
