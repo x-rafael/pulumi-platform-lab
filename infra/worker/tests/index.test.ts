@@ -65,6 +65,7 @@ test("stack dev + environment=dev: chỉ tạo worker, đủ 7 exports, tags the
   expect(source.inputs.visibilityTimeoutSeconds).toBe(120);
   expect(source.inputs.name).toBe("platform-worker-dev-queue");
   expect(runtime.one("aws:sqs/queue:Queue", "platform-worker-queues-dlq").inputs.name).toBe("platform-worker-dev-dlq");
+  expect(runtime.one("aws:iam/role:Role", "platform-worker-role").inputs.name).toBe("platform-worker-dev-role");
 
   // Không có ALB/Fargate trong caller của worker.
   const types = new Set(runtime.registrations.map((r) => r.type));

@@ -17,8 +17,9 @@ import { ENVIRONMENTS, type Environment, requireInteger, requireTags } from "./v
  * Defaults của lab: timeout 10s, memory 128 MiB, batchSize 1, batching window 0,
  * log retention 7 ngày, runtime nodejs22.x, code từ `./dist` (chạy Pulumi từ project root).
  *
- * Tên vật lý (function, log group, source queue, DLQ) có chứa tên stack nên `dev` và `pr-12`
- * không trùng nhau trong cùng account/region.
+ * Tên vật lý (function, log group, source queue, DLQ, IAM role) có chứa tên stack nên `dev` và `pr-12`
+ * không trùng nhau trong cùng account/region. Policy của role CI (infra/bootstrap) dựa vào đúng các
+ * mẫu tên này: đổi tên ở đây thì phải đổi `workerNames` ở bootstrap.
  */
 export interface LambdaWorkerArgs extends Omit<QueueWithDlqArgs, "physicalName"> {
   /** Gắn vào tên vật lý; do caller (index.ts) lấy từ `pulumi.getStack()`. */
@@ -36,6 +37,7 @@ const DEFAULT_MEMORY_MIB = 128;
 const BATCH_SIZE = 1;
 const BATCHING_WINDOW_SECONDS = 0;
 const LOG_RETENTION_DAYS = 7;
+const MAX_ROLE_NAME_LENGTH = 64;
 
 const LAMBDA_ASSUME_ROLE = JSON.stringify({
   Version: "2012-10-17",
@@ -84,6 +86,12 @@ function resolveArgs(name: string, args: LambdaWorkerArgs): ResolvedArgs {
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(functionName)) {
     throw new Error(`Invalid function name: ${JSON.stringify(functionName)} (1-64 chars: letters, digits, - or _)`);
   }
+  // Role có tên cố định `<function>-role` để quyền CI (PassRole, PutRolePolicy) giới hạn đúng role
+  // của từng stack. IAM cho tối đa 64 ký tự nên function name dài quá 59 ký tự sẽ không còn chỗ cho "-role".
+  const roleName = `${functionName}-role`;
+  if (roleName.length > MAX_ROLE_NAME_LENGTH) {
+    throw new Error(`Invalid role name: ${JSON.stringify(roleName)} (IAM allows at most ${MAX_ROLE_NAME_LENGTH} chars)`);
+  }
   return resolved;
 }
 
@@ -125,7 +133,7 @@ export class LambdaWorker extends pulumi.ComponentResource {
 
     this.role = new aws.iam.Role(
       `${name}-role`,
-      { assumeRolePolicy: LAMBDA_ASSUME_ROLE, tags: config.tags },
+      { name: `${physicalName}-role`, assumeRolePolicy: LAMBDA_ASSUME_ROLE, tags: config.tags },
       child,
     );
 

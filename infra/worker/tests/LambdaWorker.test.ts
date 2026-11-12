@@ -258,6 +258,16 @@ describe("tên vật lý chứa stack", () => {
     expect(reg(T.logGroup, shared.c.logs).inputs.name).toBe("/aws/lambda/wk-dev");
     expect(reg(T.queue, shared.c.source).inputs.name).toBe("wk-dev-queue");
     expect(reg(T.queue, shared.c.dlq).inputs.name).toBe("wk-dev-dlq");
+    // Role có tên cố định theo stack để policy CI giới hạn được đúng role (PassRole, PutRolePolicy).
+    expect(reg(T.role, shared.c.role).inputs.name).toBe("wk-dev-role");
+  });
+
+  test("tên role tối đa 64 ký tự: 64 hợp lệ, 65 bị từ chối", async () => {
+    // "x"×55 + "-dev" = function 59 ký tự -> role 64 ký tự.
+    const ok = await build("x".repeat(55));
+    expect((reg(T.role, ok.c.role).inputs.name as string).length).toBe(64);
+    // "x"×56 -> function 60 (hợp lệ cho Lambda) nhưng role 65 (vượt giới hạn IAM).
+    expect(() => new Ctor("x".repeat(56), BASE)).toThrow("Invalid role name");
   });
 
   test("stack pr-12: bốn tên vật lý đổi theo stack, environment vẫn là dev và tags được giữ", async () => {
@@ -268,6 +278,7 @@ describe("tên vật lý chứa stack", () => {
     expect(reg(T.logGroup, c.logs).inputs.name).toBe("/aws/lambda/wk-pr-pr-12");
     expect(reg(T.queue, c.source).inputs.name).toBe("wk-pr-pr-12-queue");
     expect(reg(T.queue, c.dlq).inputs.name).toBe("wk-pr-pr-12-dlq");
+    expect(reg(T.role, c.role).inputs.name).toBe("wk-pr-pr-12-role");
     expect(reg(T.fn, c.fn).inputs.tags).toEqual(prTags);
     expect(reg(T.queue, c.source).inputs.tags).toEqual(prTags);
     // Tên suy ra từ stack chứ không từ environment: environment ở đây là dev nhưng tên không có "-dev".

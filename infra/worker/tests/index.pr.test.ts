@@ -58,6 +58,8 @@ test("pr-12 + environment=dev: tên vật lý có stack, tag PR đầy đủ", a
   expect(runtime.one("aws:sqs/queue:Queue", "platform-worker-queues-dlq").inputs.name).toBe(
     "platform-worker-pr-12-dlq",
   );
+  // Tên role cố định theo stack: policy của lab-pr-env cho phép `platform-worker-pr-*-role`, không đụng role của dev.
+  expect(runtime.one("aws:iam/role:Role", "platform-worker-role").inputs.name).toBe("platform-worker-pr-12-role");
 
   const expectedTags = {
     Service: "platform-worker",
