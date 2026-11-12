@@ -13,9 +13,10 @@ AWS OIDC (không dùng access key dài hạn), deploy theo environment và môi 
 .github/workflows/   # Workflow CI/deploy/PR environment (thêm dần); hiện có oidc-check.yml
 infra/worker/        # Pulumi project `platform-worker`: components/, handlers/, tests/, index.ts
 infra/bootstrap/     # Pulumi project `platform-ci-bootstrap`: OIDC provider + role CI (chỉ admin chạy ở máy local)
-docs/ci-access.md    # CI truy cập AWS thế nào: trust/permission, bằng chứng kiểm chứng, giới hạn đã biết
+docs/ci-access.md    # CI truy cập AWS thế nào: trust/permission, bằng chứng kiểm chứng, nhật ký AccessDenied, giới hạn đã biết
+docs/pr-environments.md  # PR environment: vòng đời, quy tắc an toàn, bảng quyết định của reaper, bằng chứng
 docs/migration/      # Runbook/bằng chứng migration, chỉ đưa vào sau khi đã kiểm tra nội dung
-scripts/             # Script vòng đời PR environment và reaper (thêm sau)
+scripts/             # pr-env.ts: vòng đời PR environment (up, destroy) và reaper; logic quyết định là hàm thuần có test
 ```
 
 ## Kiểm tra local
@@ -60,14 +61,12 @@ Stack `dev`/`test`/`prod` không được mang các key này. PR stack gắn tag
 
 ## Quy ước dọn dẹp (TTL 24 giờ)
 
-PR stack tồn tại tối đa **24 giờ** kể từ lúc tạo. PR đóng thì stack bị destroy; PR còn mở nhưng
-quá TTL cũng bị dọn. Tag không tự xoá resource: phần dọn do workflow đóng PR và reaper (thêm sau) thực hiện.
-Stack `dev`, `test`, `prod` không bao giờ nằm trong phạm vi reaper.
+PR stack tồn tại tối đa **24 giờ** kể từ lúc tạo (push thêm commit không kéo dài). PR đóng thì stack bị destroy; PR còn mở nhưng quá TTL cũng bị dọn. Tag không tự xoá resource: việc dọn do workflow đóng PR và reaper thực hiện. Reaper chạy **mỗi 6 giờ và dọn thật** cho tới khi bị tắt (`gh workflow disable "PR environment reaper"`). Stack `dev`, `test`, `prod` không bao giờ nằm trong phạm vi reaper. Chi tiết ở [docs/pr-environments.md](docs/pr-environments.md).
 
 ## Tình trạng
 
-- Có: repo, code/tests của worker; OIDC provider + 4 role CI; CI cho PR (`unit` + `preview`, cả AWS lẫn Pulumi Cloud đăng nhập bằng OIDC, không có secret tĩnh);
-  deploy stack `dev` tự động khi push vào `main` kèm smoke test; cổng phê duyệt cho environment `prod` (chỉ preview). Xem [docs/ci-access.md](docs/ci-access.md).
-- Giới hạn đã biết: chỉ có một người dùng nên cổng `prod` là owner tự phê duyệt; chưa có required check `unit` (ruleset chưa cấu hình); không có merge queue (repo thuộc tài khoản cá nhân).
-- Chưa có: PR environment (`pr-<n>`) và reaper. Stack `dev` đang chạy 11 resource thật (sandbox); dọn ở bước cuối.
-  README này được cập nhật khi từng phần có bằng chứng chạy thật.
+- Có: repo, code/tests của worker; OIDC provider + 4 role CI; CI cho PR (`unit` + `preview`; cả AWS lẫn Pulumi Cloud đăng nhập bằng OIDC, không có secret tĩnh);
+  deploy stack `dev` khi push vào `main` kèm smoke test; cổng phê duyệt cho environment `prod` (chỉ preview); **PR environment** (tạo, cập nhật, xoá khi đóng PR) và **reaper TTL 24 giờ**,
+  đều có bằng chứng chạy thật. Xem [docs/ci-access.md](docs/ci-access.md) và [docs/pr-environments.md](docs/pr-environments.md).
+- Giới hạn đã biết: chỉ có một người dùng nên cổng `prod` là owner tự phê duyệt; ruleset `main` bắt buộc check `unit` nhưng chủ repo được bypass; không có merge queue (repo thuộc tài khoản cá nhân).
+- Stack `dev` đang chạy 11 resource thật (sandbox); dọn ở bước cuối.

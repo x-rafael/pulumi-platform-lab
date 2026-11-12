@@ -104,16 +104,16 @@ Bằng chứng nằm ở `keeptrack/Day4/evidence/01…06-*.txt` (ngoài repo, �
 
 > Các run 43185395051, 43191003578, 43191716209, 43192266735, 43192272296 và 43192438296 được trích dẫn ở trên đã bị **xoá** trước khi chuyển repo sang public, vì log in account ID thật. Kết quả của chúng được lưu ở file bằng chứng nói trên. Run 43212367473 (trên `main`) là bản log đã mask và còn tồn tại.
 
-**Đã chạy thật ở Chặng 3:** create (đủ 11 resource, gồm PassRole và tag-on-create), refresh, no-op update, smoke test và preview của `lab-preview`.
-**Chưa chạy bằng role CI:** update tại chỗ (`UpdateFunctionCode`, `UpdateFunctionConfiguration`, `SetQueueAttributes`, `UpdateEventSourceMapping`) và **destroy**
-(`DeleteFunction`, `DeleteQueue`, `DeleteLogGroup`, `DeleteRole`, `DeleteRolePolicy`, `DeleteEventSourceMapping`); destroy được thử ở Chặng 4 (`lab-pr-env`).
+**Đã chạy thật bằng role CI:** create (đủ 11 resource, gồm PassRole và tag-on-create), refresh, no-op update, smoke test, preview của `lab-preview` (Chặng 3);
+update tại chỗ (`UpdateFunctionCode`) và **destroy** của PR environment bằng `lab-pr-env` (Chặng 4, xem nhật ký lỗi bên dưới: destroy lộ ra hai AccessDenied thật).
+**Chưa chạy bằng role CI:** `UpdateFunctionConfiguration`, `SetQueueAttributes`, `UpdateEventSourceMapping` (chưa có thay đổi nào kích hoạt chúng), và destroy của stack `dev`/`prod` bằng `lab-deploy-dev`/`lab-deploy-prod`.
 Simulator chỉ đánh giá identity policy, không cho biết provider Pulumi thực sự gọi những API nào. Ca âm dùng STS, vốn trả cùng một thông báo
 cho role *không tồn tại*; chúng chỉ có ý nghĩa vì role đích đã được chứng minh tồn tại ở nơi khác
 (ca dương cho `lab-preview`, `03-roles-and-trust.txt` cho các role còn lại).
 
 ## Nhật ký lỗi và AccessDenied
 
-**Chưa có AccessDenied nào từ CI thật** (Chặng 3 đối chiếu bằng CloudTrail: 0 `AccessDenied`/`Unauthorized` ở mọi phiên role CI có dữ liệu), nên Chặng 3 không phải sửa policy bootstrap lần nào. Preview của PR #1 (stack rỗng) không chứng minh được quyền đọc; PR probe #3 trên stack có 11 resource thật mới là phép thử, và nó qua. Các phát hiện:
+**Chặng 3 không có AccessDenied nào** (CloudTrail: 0 `AccessDenied`/`Unauthorized` ở mọi phiên có dữ liệu). **Chặng 4 có hai** (destroy bằng role CI, xem hai hàng đầu của bảng dưới), cả hai cùng một nguyên nhân gốc: mapping đã biến mất nên IAM đánh giá với Resource `*`. Preview của PR #1 (stack rỗng) không chứng minh được quyền đọc; PR probe #3 trên stack có 11 resource thật mới là phép thử, và nó qua. Các phát hiện:
 
 | Khi nào | Nguồn | Hiện tượng | Nguyên nhân / xử lý |
 | --- | --- | --- | --- |
@@ -121,6 +121,10 @@ cho role *không tồn tại*; chúng chỉ có ý nghĩa vì role đích đã �
 | Khi chạy simulator | `lambda:CreateEventSourceMapping` | `implicitDeny` dù Resource là ARN mapping + đúng điều kiện | Create không hỗ trợ resource-level (ARN chưa tồn tại lúc tạo). Chuyển sang `Resource: "*"` giữ nguyên điều kiện `lambda:FunctionArn`; `UpdateEventSourceMapping` thì giữ ARN mapping. Simulator xác nhận lại |
 | Khi validate | Access Analyzer, trust policy | Cảnh báo `SPECIFIC_GITHUB_REPO_AND_BRANCH_RECOMMENDED` dù sub không có wildcard | Cùng cảnh báo với cả dạng sub cũ: sub theo environment không chứa tên branch. Ranh giới branch đặt ở deployment branch policy của environment `dev`/`prod` (chỉ `main`), xem bên dưới |
 | Chặng 3, deploy dev #1 (CloudTrail, phiên `lab-deploy-dev-43218214696`) | Lambda `CreateFunction` (4 lần), `CreateEventSourceMapping` (4 lần) | 8 lỗi `InvalidParameterValueException`: "The role defined for the function cannot be assumed by Lambda" và "The function execution role does not have permissions to call ReceiveMessage on SQS" | **Không phải thiếu quyền của role CI**: IAM lan truyền chậm sau khi tạo execution role. Provider tự thử lại và thành công (`up` 1m24s). Không nới policy vì chúng |
+
+| Chặng 4, destroy PR env lần 1 (run 43228386404) | `lambda:GetEventSourceMapping` bị AccessDenied **"on resource: \*"** | `lab-pr-env` không được phép đọc mapping khi provider poll chờ xoá xong | Sau khi xoá mapping, ARN theo UUID không còn nên IAM đánh giá lời gọi với Resource `*`, trong khi Get chỉ được Allow trên `event-source-mapping:*`. Thêm statement `LambdaMappingGetAfterDelete` (chỉ `lambda:GetEventSourceMapping` trên `*`, chỉ đọc metadata) cho 3 role deploy; `lab-preview` không có. Sửa bằng `pulumi up` bootstrap + simulator (65 ca), commit `7affc22` |
+| Chặng 4, destroy lần 2 và 3 (cùng run, thử lại) | `lambda:DeleteEventSourceMapping` bị AccessDenied "on resource: \*" | Delete lên mapping **không còn tồn tại** | Lần 1 AWS đã xoá mapping nhưng Pulumi chưa ghi nhận, nên lần thử lại gọi Delete lên thứ đã mất → Resource `*`. **Không nới quyền Delete** (sẽ cho xoá mapping bất kỳ trong account). Thay vào đó `pulumi destroy --refresh`: refresh đọc lại thực tế (Get trên `*` đã được phép), bỏ mapping khỏi state rồi chỉ xoá phần còn lại. Lần 4 thành công: `10 deleted` |
+| Chặng 4, tạo PR env (CloudTrail, phiên `lab-pr-env-43227200228`) | Lambda `CreateFunction` ×4, `CreateEventSourceMapping` ×4 | 8 lỗi `InvalidParameterValueException` | Như Chặng 3: IAM lan truyền chậm, provider tự thử lại. Không phải thiếu quyền, không nới policy |
 
 Khi gặp AccessDenied thật, thêm một dòng: action thiếu, resource, vì sao cần, và commit sửa.
 
@@ -134,8 +138,9 @@ Khi gặp AccessDenied thật, thêm một dòng: action thiếu, resource, vì 
 - **Event source mapping:** Get/Delete/Tag dùng UUID nên không giới hạn được theo tên (Create/Update thì có điều kiện function).
 - **Environment là ranh giới, nên phải được bảo vệ.** Workflow ở branch bất kỳ tham chiếu `environment: <tên>` chưa tồn tại sẽ tự tạo
   environment không bảo vệ. Hiện: `dev` và `prod` chỉ cho deploy từ `main`; `preview` không giới hạn branch (role chỉ đọc, dùng cho PR do
-  chủ repo kiểm soát); `pr-env` **đã được tạo có chủ đích** (biến `AWS_ROLE_ARN` = `lab-pr-env`) nhưng **chưa có reviewer hay branch policy**: job chạy trên PR có ref
-  `refs/pull/N/merge` nên cách giới hạn phải được kiểm bằng thử nghiệm ở Chặng 4 (đến lúc đó chỉ PR tin cậy trong cùng repo).
+  chủ repo kiểm soát); `pr-env` **đã được tạo có chủ đích** (biến `AWS_ROLE_ARN` = `lab-pr-env`) nhưng **không có reviewer hay branch policy**:
+  job PR chạy trên ref `refs/pull/N/merge` còn job lịch/dispatch chạy trên `main` và cùng dùng environment này, nên một branch policy phải nhận cả hai; chưa thử
+  (hardening, không thuộc checkpoint). Ranh giới thực tế là quyền ghi vào repo: ai ghi được vào repo thì chạy được job dùng `pr-env`, và job đó **chạy code của PR** với `lab-pr-env`.
   `prod` đã có required reviewer (xem mục cổng phê duyệt bên dưới).
 - **Repo public ở tài khoản cá nhân (gói Free), từ 2026-11-12.** Trước đó repo private và API trả 403
   `Upgrade to GitHub Pro or make this repository public to enable this feature.` cho `rulesets` và `branches/main/protection`; một PR có `unit` đỏ vẫn là
@@ -189,7 +194,8 @@ Kiểm chứng phạm vi policy (run 43192266735, `oidc-check.yml`, cùng action
   Điều này loại trừ policy có sub `*` hoặc `repo:…:*`.
 - **Đã kiểm ở Chặng 3:** trước khi thêm policy, job `dev` và `prod` đều bị `401 access_denied` (run 43216318729), nên policy `preview` không phải mẫu `…:environment:*`;
   sau khi thêm, cả hai nhận token (run 43218073008) và job không environment vẫn bị từ chối.
-- **Chưa kiểm:** sub của `pr-env` và của repo khác. Policy do chủ org nhập trên giao diện, tôi không đọc lại được: hãy đối chiếu bảng trên với giá trị đã lưu.
+- **Đã kiểm với `pr-env`:** `oidc-check.yml` run 43223707749 và mọi run PR environment (create/update/destroy/reaper) đổi được token. Sub của repo khác vẫn **chưa kiểm**.
+- **Chưa kiểm:** sub của repo khác. Policy do chủ org nhập trên giao diện, tôi không đọc lại được: hãy đối chiếu bảng trên với giá trị đã lưu.
 
 Rủi ro còn lại (đã nhỏ hơn token tĩnh, nhưng không bằng không):
 
