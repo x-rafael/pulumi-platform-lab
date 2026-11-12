@@ -48,6 +48,8 @@ const DISCOVERY_ACTIONS = new Set([
   "lambda:ListEventSourceMappings",
   // Resource "*" bắt buộc (không có resource-level), phạm vi nằm ở điều kiện lambda:FunctionArn; có test riêng.
   "lambda:CreateEventSourceMapping",
+  // Get sau khi mapping đã bị xoá được IAM đánh giá với Resource "*" (AccessDenied thật khi destroy bằng role CI).
+  "lambda:GetEventSourceMapping",
 ]);
 const anyAllowMatches = (policy: PermissionPolicy, arn: string) =>
   resourcesOf(allows(policy).filter((s) => !s.Action.every((a) => DISCOVERY_ACTIONS.has(a)))).some((p) =>
@@ -158,10 +160,10 @@ describe("permission policy: cấu trúc chung", () => {
     }
   });
 
-  test.each(policies)("%s: resource '*' chỉ cho List mapping và Create mapping (có điều kiện function)", (_name, policy) => {
+  test.each(policies)("%s: resource '*' chỉ cho List/Get mapping và Create mapping (có điều kiện function)", (_name, policy) => {
     for (const s of allows(policy)) {
       if (!s.Resource.includes("*")) continue;
-      expect(["lambda:ListEventSourceMappings", "lambda:CreateEventSourceMapping"], s.Sid).toEqual(
+      expect(["lambda:ListEventSourceMappings", "lambda:GetEventSourceMapping", "lambda:CreateEventSourceMapping"], s.Sid).toEqual(
         expect.arrayContaining(s.Action),
       );
       // Create trên '*' mà không có điều kiện FunctionArn sẽ cho tạo mapping tới bất kỳ function nào.
@@ -206,6 +208,11 @@ describe("permission policy: cấu trúc chung", () => {
 
 describe("lab-preview: chỉ đọc, chỉ stack dev", () => {
   const policy = buildPermissionPolicy(CTX, role("lab-preview"));
+
+  test("không có Get mapping trên '*' (quyền đó chỉ cần cho destroy, preview không xoá gì)", () => {
+    const wildcardGet = allows(policy).filter((st) => st.Resource.includes("*") && st.Action.includes("lambda:GetEventSourceMapping"));
+    expect(wildcardGet).toEqual([]);
+  });
 
   test("mọi Allow là Get/List/Describe", () => {
     for (const s of allows(policy)) {
@@ -280,6 +287,14 @@ describe("role deploy: phạm vi theo stack", () => {
     expect(withPass[0].Action).toEqual(["iam:PassRole"]);
     expect(withPass[0].Resource).toEqual([workerArns(CTX, role(name).scope).role]);
     expect(withPass[0].Condition).toEqual({ StringEquals: { "iam:PassedToService": "lambda.amazonaws.com" } });
+  });
+
+  test.each(cases)("%s: Get mapping trên '*' để destroy chờ xoá xong (và là quyền duy nhất đọc trên '*')", (name) => {
+    const stmt = allows(buildPermissionPolicy(CTX, role(name))).filter(
+      (st) => st.Resource.includes("*") && st.Action.includes("lambda:GetEventSourceMapping"),
+    );
+    expect(stmt.map((st) => st.Sid)).toEqual(["LambdaMappingGetAfterDelete"]);
+    expect(stmt[0]?.Action).toEqual(["lambda:GetEventSourceMapping"]);
   });
 
   test.each(cases)("%s: event source mapping Create/Update bị ràng buộc theo function của stack", (name) => {

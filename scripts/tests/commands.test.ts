@@ -121,6 +121,8 @@ describe("destroy", () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(calls.some((c) => c.args.includes("--force"))).toBe(false);
     expect(has("stack init")).toBe(false);
+    // Thử lại phải idempotent: refresh trước khi xoá để resource AWS đã xoá nhưng còn trong state không gây Delete lên thứ không tồn tại.
+    expect(calls.find((c) => c.text.includes("pulumi destroy"))?.args).toContain("--refresh");
   });
 
   test("tag không khớp (repo khác) → từ chối, không destroy, không rm", () => {

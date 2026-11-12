@@ -66,6 +66,11 @@ check lab-deploy-dev lambda:CreateEventSourceMapping "*" denied "lambda:Function
 check lab-deploy-dev lambda:CreateEventSourceMapping "*" denied
 check lab-deploy-dev lambda:UpdateEventSourceMapping "$L:event-source-mapping:*" allowed "lambda:FunctionArn=$L:function:platform-worker-dev"
 check lab-deploy-dev lambda:UpdateEventSourceMapping "$L:event-source-mapping:*" denied "lambda:FunctionArn=$L:function:platform-worker-pr-12"
+# Destroy: provider poll GetEventSourceMapping tới khi mapping biến mất; lúc đó IAM đánh giá với Resource "*" (AccessDenied thật).
+check lab-deploy-dev lambda:GetEventSourceMapping "*" allowed
+check lab-deploy-prod lambda:GetEventSourceMapping "*" allowed
+check lab-pr-env lambda:GetEventSourceMapping "*" allowed
+check lab-preview lambda:GetEventSourceMapping "*" denied
 echo "-- smoke test: chỉ gửi vào source queue"
 check lab-deploy-dev sqs:SendMessage "$Q:platform-worker-dev-queue" allowed
 check lab-deploy-dev sqs:SendMessage "$Q:platform-worker-dev-dlq" denied

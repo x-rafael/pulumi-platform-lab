@@ -92,9 +92,14 @@ export const previewStack = (ctx: PulumiContext, full: string) =>
   void pulumi(ctx, ["preview", "--stack", full, "--diff", "--refresh"], true);
 export const upStack = (ctx: PulumiContext, full: string) =>
   void pulumi(ctx, ["up", "--stack", full, "--yes", "--refresh", "--skip-preview"], true);
-/** KHÔNG dùng --force: nếu còn resource sót thì phải để lỗi nổi lên, không che đi. */
+/**
+ * KHÔNG dùng --force: nếu còn resource sót thì phải để lỗi nổi lên, không che đi.
+ * `--refresh` làm cho lần thử lại idempotent: nếu lần trước AWS đã xoá một resource nhưng Pulumi chưa kịp ghi nhận
+ * (vd. event source mapping), refresh đọc lại thực tế và bỏ nó khỏi state, thay vì gọi Delete lên thứ không còn tồn tại
+ * (IAM đánh giá lời gọi đó với Resource "*", nên sẽ AccessDenied; xem docs/ci-access.md). Không cần nới quyền xoá.
+ */
 export const destroyStack = (ctx: PulumiContext, full: string) =>
-  void pulumi(ctx, ["destroy", "--stack", full, "--yes"], true);
+  void pulumi(ctx, ["destroy", "--stack", full, "--yes", "--refresh"], true);
 export const exportResourceCount = (ctx: PulumiContext, full: string) =>
   countResources(pulumi(ctx, ["stack", "export", "--stack", full]).stdout);
 export const removeStack = (ctx: PulumiContext, full: string) => void pulumi(ctx, ["stack", "rm", full, "--yes"]);

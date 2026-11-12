@@ -276,6 +276,16 @@ function writeStatements(ctx: AccountContext, scope: StackScope): Statement[] {
       Resource: [arn.mappings],
     },
     {
+      // AccessDenied thật ở lần destroy đầu tiên bằng role CI (PR environment, 2026-11-12): sau khi xoá mapping, provider
+      // poll GetEventSourceMapping cho tới khi báo "không còn". Lúc mapping đã hết, ARN theo UUID không còn nên IAM đánh giá
+      // lời gọi với Resource "*" ("on resource: *"), trong khi Get chỉ được Allow trên event-source-mapping:*. Chỉ đọc metadata;
+      // Create/Update/Delete vẫn bị ràng buộc như trên. Role preview không có statement này (không xoá gì).
+      Sid: "LambdaMappingGetAfterDelete",
+      Effect: "Allow",
+      Action: ["lambda:GetEventSourceMapping"],
+      Resource: ["*"],
+    },
+    {
       Sid: "LogsLifecycle",
       Effect: "Allow",
       Action: [
