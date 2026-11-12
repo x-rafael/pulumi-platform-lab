@@ -1,0 +1,10 @@
+name: platform-worker
+description: SQS + DLQ + Lambda queue worker (Pulumi platform lab, sandbox)
+runtime:
+  name: nodejs
+  options:
+    packagemanager: npm
+config:
+  pulumi:tags:
+    value:
+      pulumi:template: aws-typescript

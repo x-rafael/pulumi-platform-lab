@@ -1,0 +1,22 @@
+{
+    "name": "platform-worker",
+    "main": "index.ts",
+    "devDependencies": {
+        "@types/aws-lambda": "8.10.164",
+        "@types/node": "22.20.5",
+        "esbuild": "0.28.2",
+        "tsx": "4.23.15",
+        "typescript": "^5.0.0",
+        "vitest": "5.1.0"
+    },
+    "dependencies": {
+        "@pulumi/aws": "^7.0.0",
+        "@pulumi/pulumi": "^3.113.0"
+    },
+    "scripts": {
+        "typecheck": "tsc --noEmit",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "build:handler": "esbuild handlers/worker.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/worker.js"
+    }
+}

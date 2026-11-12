@@ -1,0 +1,20 @@
+# Dependencies và build output (khớp cả infra/worker/...)
+node_modules/
+dist/
+infra/worker/bin/
+.vitest/
+
+# State và secrets: không bao giờ commit
+.pulumi-state/
+state-backups/
+*.tfstate
+*.tfstate.*
+.env
+.env.*
+!.env.example
+
+# OS / editor / log
+.DS_Store
+.idea/
+.vscode/
+*.log
