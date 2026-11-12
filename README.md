@@ -66,7 +66,8 @@ Stack `dev`, `test`, `prod` không bao giờ nằm trong phạm vi reaper.
 
 ## Tình trạng
 
-- Có: repo, code/tests của worker; OIDC provider + 4 role CI và workflow `oidc-check.yml` chứng minh job GitHub
-  assume được role (và bị từ chối đúng chỗ) mà không dùng access key. Xem [docs/ci-access.md](docs/ci-access.md).
-- Chưa có: workflow CI/preview cho PR, deploy dev, approval gate, PR environment và reaper.
+- Có: repo, code/tests của worker; OIDC provider + 4 role CI; CI cho PR (`unit` + `preview`, cả AWS lẫn Pulumi Cloud đăng nhập bằng OIDC, không có secret tĩnh);
+  deploy stack `dev` tự động khi push vào `main` kèm smoke test; cổng phê duyệt cho environment `prod` (chỉ preview). Xem [docs/ci-access.md](docs/ci-access.md).
+- Giới hạn đã biết: chỉ có một người dùng nên cổng `prod` là owner tự phê duyệt; chưa có required check `unit` (ruleset chưa cấu hình); không có merge queue (repo thuộc tài khoản cá nhân).
+- Chưa có: PR environment (`pr-<n>`) và reaper. Stack `dev` đang chạy 11 resource thật (sandbox); dọn ở bước cuối.
   README này được cập nhật khi từng phần có bằng chứng chạy thật.
