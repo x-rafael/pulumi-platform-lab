@@ -207,7 +207,7 @@ Rủi ro còn lại (đã nhỏ hơn token tĩnh, nhưng không bằng không):
 Lần đầu tạo 11 resource trong 1m24s (job 156s); lần hai là no-op (`11 unchanged`, job 69s). Không đặt timeout nào để làm đẹp số đo.
 Workflow cũng ghi một bảng thời gian vào job summary (chỉ thời gian, không ARN/URL); nội dung bảng đó chưa được kiểm tra. Số đo trong tài liệu này lấy từ API (`started_at`/`completed_at` của từng bước).
 
-Lưu ý khi dùng `oidc-check.yml`: input `dev_prod_pulumi` mặc định `allowed`, và job `prod` sẽ **chờ phê duyệt** ở mỗi lần dispatch vì environment `prod` có required reviewers.
+Lưu ý khi dùng `oidc-check.yml`: input `env_pulumi` mặc định `allowed` (đúng khi policy Pulumi của environment đã có). Job `prod` chỉ chạy khi bật `include_prod`, và khi đó nó **chờ phê duyệt** vì environment `prod` có required reviewers.
 
 **Chống chồng deploy: hai lớp khác nhau, lớp này không thay lớp kia.**
 

@@ -17,14 +17,19 @@ on:
     inputs:
       env_pulumi:
         description: >-
-          Kết quả MONG ĐỢI khi environment dev/prod/pr-env đổi token Pulumi. Mặc định `allowed`: policy của dev và prod đã tồn tại; pr-env chỉ `allowed` SAU khi bạn thêm policy của nó;
-          chọn `denied` chỉ khi kiểm lại trước lúc thêm policy (loại trừ policy dạng ...:environment:*).
-          LƯU Ý: environment prod có required reviewers nên job prod sẽ đứng chờ phê duyệt ở MỖI lần dispatch.
+          Kết quả MONG ĐỢI khi các environment dev/pr-env (và prod nếu bật) đổi token Pulumi. Mặc định `allowed`:
+          chỉ đúng khi policy Pulumi của environment đó đã tồn tại; chọn `denied` để kiểm lại TRƯỚC khi thêm policy
+          (loại trừ policy dạng ...:environment:*).
         type: choice
         options:
           - allowed
           - denied
         default: allowed
+      include_prod:
+        description: >-
+          Chạy cả job environment prod. Environment prod có required reviewers nên job đó sẽ đứng chờ bạn phê duyệt.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -186,7 +191,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        environment: [dev, prod, pr-env]
+        environment: ${{ fromJSON(inputs.include_prod && '["dev","prod","pr-env"]' || '["dev","pr-env"]') }}
     environment: ${{ matrix.environment }}
     permissions:
       contents: read
