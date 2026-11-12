@@ -119,5 +119,28 @@ Khi gặp AccessDenied thật ở Chặng 2–3, thêm một dòng: action thi�
   environment không bảo vệ. Hiện: `dev` và `prod` chỉ cho deploy từ `main`; `preview` không giới hạn branch (role chỉ đọc, dùng cho PR do
   chủ repo kiểm soát); `pr-env` **chưa được tạo**, sẽ tạo với rule phù hợp ở Chặng 4 (đến lúc đó chỉ PR tin cậy trong cùng repo).
   Required reviewers của `prod` làm ở Chặng 3.
-- **Repo private ở tài khoản cá nhân:** Environments tạo được (đã kiểm), nhưng required reviewers và merge queue có thể bị giới hạn
-  theo gói/loại sở hữu; kiểm tra ở Chặng 3 và ghi đúng trạng thái thực nghiệm.
+- **Repo private ở tài khoản cá nhân (gói Free):** tạo Environment và branch policy của environment được (đã kiểm). Đã kiểm bằng API ngày 2026-11-12:
+  - `GET /repos/x-rafael/pulumi-platform-lab/rulesets` và `/branches/main/protection` đều trả 403
+    `Upgrade to GitHub Pro or make this repository public to enable this feature.` Nên **không đặt được required check `unit`**
+    và một check đỏ **không chặn** được merge (chỉ là tín hiệu cho người merge).
+  - Merge queue chỉ có với repo thuộc organization (chủ repo ở đây là `User`), nên trigger `merge_group` trong `ci.yml` **đã viết, chưa kiểm chứng queue**.
+  - Required reviewers của environment `prod` (Chặng 3) có thể gặp cùng giới hạn; kiểm bằng API trước khi tuyên bố gate có tác dụng.
+  Các lựa chọn: chuyển repo public sau khi review nội dung, nâng cấp GitHub Pro, hoặc chấp nhận gate chưa thực nghiệm và ghi đúng như vậy.
+
+## Pulumi Cloud token trong CI
+
+Pulumi Cloud xác thực riêng; role AWS ở trên không đăng nhập Pulumi hộ. CI dùng secret `PULUMI_ACCESS_TOKEN`.
+
+- **Chỉ ở environment secret của `preview`** (không phải repo secret), nên job `unit` và mọi job không khai `environment: preview` không thấy token.
+- **Rủi ro cần biết:** ở gói hiện tại token là *personal access token*, có quyền của chính chủ trên **mọi stack trong `x-rafael-org`**, kể cả
+  `platform-ci-bootstrap/lab`. Environment `preview` không giới hạn branch, nên bất kỳ branch nào trong repo tham chiếu `environment: preview` đều nhận được token.
+  Chặn hậu quả phía AWS vẫn là role `lab-preview` chỉ đọc; nhưng phía Pulumi thì token không bị thu hẹp. Chỉ chủ repo có quyền ghi, và fork không chạy job `preview`.
+  Muốn thu hẹp: org/team token (tính năng trả phí) hoặc Pulumi OIDC issuer; chưa dùng.
+- **Tạo/xoay:** app.pulumi.com → Settings → Access Tokens → New token (ghi mô tả và đặt hạn dùng). Rồi, ở terminal của bạn (dán token ở prompt, không dán vào chat/log):
+
+  ```bash
+  gh secret set PULUMI_ACCESS_TOKEN --repo x-rafael/pulumi-platform-lab --env preview
+  gh secret list --repo x-rafael/pulumi-platform-lab --env preview     # chỉ thấy tên và ngày, không thấy giá trị
+  ```
+
+  Xoay token: tạo token mới, `gh secret set` lại, rồi thu hồi token cũ trong Pulumi Cloud.

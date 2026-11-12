@@ -1,0 +1,110 @@
+name: CI
+
+# Trigger -> permissions -> unit -> ranh giới tin cậy -> environment -> assume role -> Pulumi preview.
+#
+# - `unit` chạy ở mọi PR (kể cả fork, không credentials), merge_group và push vào main.
+#   Giữ tên job ổn định là `unit` để dùng làm required check; KHÔNG dùng path filter ở cấp workflow,
+#   vì check không xuất hiện thì required check treo mãi.
+# - `preview` chỉ chạy với PR cùng repo (code đã được chủ repo đưa vào) và chỉ sau khi `unit` xanh,
+#   nên code lỗi test không bao giờ nhận credentials. Nó dùng environment `preview` (role chỉ đọc `lab-preview`).
+#   Preview của PR được phép có diff: nhiệm vụ của nó là cho reviewer xem thay đổi, nên không `expect-no-changes`.
+#
+# Chưa dùng `pull_request_target` và sẽ không dùng để checkout code PR rồi lấy secrets.
+# Action được ghim bằng commit SHA đầy đủ; version ghi ở comment bên cạnh.
+on:
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      # Worker: code Pulumi của ứng dụng.
+      - name: worker - install
+        working-directory: infra/worker
+        run: npm ci
+      - name: worker - typecheck
+        working-directory: infra/worker
+        run: npm run typecheck
+      - name: worker - test
+        working-directory: infra/worker
+        run: npm test
+      - name: worker - build handler
+        working-directory: infra/worker
+        run: npm run build:handler
+
+      # Bootstrap: policy của role CI là hàm thuần có test; sửa sai ở đây là sai quyền AWS nên chạy cùng `unit`.
+      - name: bootstrap - install
+        working-directory: infra/bootstrap
+        run: npm ci
+      - name: bootstrap - typecheck
+        working-directory: infra/bootstrap
+        run: npm run typecheck
+      - name: bootstrap - test
+        working-directory: infra/bootstrap
+        run: npm test
+
+  preview:
+    name: preview
+    needs: unit
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: preview
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: preview-worker-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: worker - install
+        working-directory: infra/worker
+        run: npm ci
+      # Pulumi đọc ./dist khi chạy chương trình: phải build handler trước preview.
+      - name: worker - build handler
+        working-directory: infra/worker
+        run: npm run build:handler
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          role-session-name: lab-preview-${{ github.run_id }}
+      - name: Danh tính AWS
+        run: aws sts get-caller-identity
+      # `defaults.run.working-directory` chỉ áp dụng cho `run`; action của Pulumi cần `work-dir` riêng.
+      - uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
+        with:
+          command: preview
+          stack-name: ${{ vars.PULUMI_STACK_DEV }}
+          work-dir: infra/worker
+          pulumi-version: '3.274.1'
+          diff: true
+          refresh: true
+          comment-on-pr: false
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
