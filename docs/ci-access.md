@@ -74,8 +74,13 @@ AWS_PROFILE=<admin> pulumi up --stack x-rafael-org/lab
 AWS_PROFILE=<admin> ./verify-policies.sh     # IAM policy simulator trên role thật
 ```
 
-Account ID không nằm trong repo hay config: lấy lúc chạy từ credentials hiện tại. ARN role nằm ở GitHub variables
-(`AWS_ACCOUNT_ID`, `AWS_REGION` ở repo; `AWS_ROLE_ARN` ở từng environment), không có AWS access key trong GitHub Secrets.
+Account ID không nằm trong repo hay config: bootstrap lấy lúc chạy từ credentials hiện tại. ARN role nằm ở GitHub variables
+(`AWS_REGION` ở repo; `AWS_ROLE_ARN` ở từng environment). Không có AWS access key hay credential nào trong GitHub.
+
+**`AWS_ACCOUNT_ID` là một GitHub *secret*, nhưng không phải credential.** Account ID không bí mật theo phân loại của AWS; nó là secret chỉ để
+GitHub tự mask trong log của repo public (biến thường thì không được mask, và runner in lại `with:`/`env:` đã khai triển của từng bước, nên cả
+một bước `::add-mask::` cũng tự làm lộ ID). Secret được mask ở mọi chỗ, kể cả khi ID nằm giữa chuỗi ARN. Phát hiện này đến từ việc rà log
+trước khi chuyển repo sang public: 6/8 run đầu tiên in ID thật.
 
 ## Đã kiểm chứng gì, bằng cách nào
 
@@ -86,7 +91,7 @@ Account ID không nằm trong repo hay config: lấy lúc chạy từ credential
 | Job không có environment bị từ chối | job `no-environment` (sub `…:ref:refs/heads/main`) thử cả 4 role | cả 4 bị từ chối |
 | Quyền theo phạm vi stack, PassRole, Deny tự-sửa | `verify-policies.sh` (IAM policy simulator), 61 ca dương/âm trên 4 role thật | 61 PASS, 0 FAIL |
 | Cú pháp policy | IAM Access Analyzer `validate-policy` | permission policy sạch; xem cảnh báo bên dưới |
-| Không có khoá dài hạn | `gh secret list` ở repo và mọi environment | 0 secret |
+| Không có khoá dài hạn | `gh secret list` ở repo và mọi environment | chỉ có `AWS_ACCOUNT_ID` (account ID để mask log, không phải credential); không có AWS key, không có Pulumi token |
 | CI thật: unit + preview, cả AWS lẫn Pulumi Cloud đăng nhập bằng OIDC | PR #1, run 43191003578 | unit 39s, preview 50s; `OIDC token exchange performed successfully`; `+ 11 to create`; không AccessDenied |
 | Policy Pulumi từ chối sub khác (một phần) | `oidc-check.yml` run 43192266735: job không environment so với job `preview`, cùng input | `401 access_denied` cho job không environment; job `preview` nhận token. Sub của `dev`/`prod`/`pr-env` chưa kiểm |
 | Test lỗi làm check đỏ và preview không nhận credentials | PR demo #2 (đã đóng không merge), run 43191426545 | `unit` failure ở bước `worker - test`; `preview` skipped. PR vẫn `MERGEABLE`: check đỏ **không chặn** merge ở gói này |

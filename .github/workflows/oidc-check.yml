@@ -28,7 +28,7 @@ jobs:
       id-token: write
     env:
       AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
-      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
     steps:
       - name: OIDC claims (chỉ iss, aud, sub, environment, ref; token được mask)
         run: |
@@ -44,7 +44,7 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
-          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          allowed-account-ids: ${{ secrets.AWS_ACCOUNT_ID }}
           role-session-name: oidc-check-${{ github.run_id }}
 
       - name: Danh tính phải là đúng role và đúng account
@@ -93,7 +93,7 @@ jobs:
       id-token: write
     env:
       AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
-      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
     steps:
       - name: Ca âm - job không có environment không được assume role nào
         run: |
