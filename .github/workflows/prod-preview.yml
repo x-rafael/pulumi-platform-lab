@@ -1,0 +1,69 @@
+name: Prod preview (approval gate)
+
+# Thử cổng phê duyệt của environment `prod` trong sandbox: chạy tay, chỉ từ main, và CHỈ `pulumi preview`
+# (stack prod chỉ có metadata/config, chưa deploy worker prod).
+#
+# Cổng nằm ở environment `prod` (Settings -> Environments): required reviewers + deployment branch chỉ `main`.
+# `environment: prod` trong YAML mới chỉ THAM CHIẾU environment; quy tắc chặn là cấu hình ở Settings. Vì job này khai
+# environment, GitHub giữ nó ở trạng thái "waiting" TRƯỚC khi bất kỳ bước nào chạy, tức là trước khi assume role hay
+# đổi token Pulumi. Chỉ sau khi reviewer phê duyệt mới có credentials.
+#
+# Giới hạn của lab: chỉ có một người dùng (chủ repo) nên cổng này là "owner tự phê duyệt", không phải phê duyệt độc lập.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preview-prod:
+    name: preview prod (after approval)
+    # Dispatch từ branch khác bị chặn ở đây VÀ ở deployment branch rule của environment.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: prod
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: deploy-platform-worker-prod
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: install
+        working-directory: infra/worker
+        run: npm ci
+      - name: build handler
+        working-directory: infra/worker
+        run: npm run build:handler
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ secrets.AWS_ACCOUNT_ID }}
+          role-session-name: lab-deploy-prod-${{ github.run_id }}
+      - name: assumed role
+        run: aws sts get-caller-identity --query Arn --output text
+      - uses: pulumi/auth-actions@273044cc19e63ea565285da8edd4e059126a0bdb # v2.1.2
+        with:
+          organization: ${{ vars.PULUMI_ORG }}
+          requested-token-type: urn:pulumi:token-type:access_token:personal
+          scope: user:${{ vars.PULUMI_USER }}
+          token-expiration: 900
+      - name: preview prod
+        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
+        with:
+          command: preview
+          stack-name: ${{ vars.PULUMI_STACK_PROD }}
+          work-dir: infra/worker
+          pulumi-version: '3.274.1'
+          diff: true
+          refresh: true
+          comment-on-pr: false
