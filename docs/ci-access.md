@@ -87,8 +87,11 @@ Account ID không nằm trong repo hay config: lấy lúc chạy từ credential
 | Quyền theo phạm vi stack, PassRole, Deny tự-sửa | `verify-policies.sh` (IAM policy simulator), 61 ca dương/âm trên 4 role thật | 61 PASS, 0 FAIL |
 | Cú pháp policy | IAM Access Analyzer `validate-policy` | permission policy sạch; xem cảnh báo bên dưới |
 | Không có khoá dài hạn | `gh secret list` ở repo và mọi environment | 0 secret |
+| CI thật: unit + preview, cả AWS lẫn Pulumi Cloud đăng nhập bằng OIDC | PR #1, run 43191003578 | unit 39s, preview 50s; `OIDC token exchange performed successfully`; `+ 11 to create`; không AccessDenied |
+| Policy Pulumi từ chối sub khác (một phần) | `oidc-check.yml` run 43192266735: job không environment so với job `preview`, cùng input | `401 access_denied` cho job không environment; job `preview` nhận token. Sub của `dev`/`prod`/`pr-env` chưa kiểm |
+| Test lỗi làm check đỏ và preview không nhận credentials | PR demo #2 (đã đóng không merge), run 43191426545 | `unit` failure ở bước `worker - test`; `preview` skipped. PR vẫn `MERGEABLE`: check đỏ **không chặn** merge ở gói này |
 
-Bằng chứng nằm ở `keeptrack/Day4/evidence/01…03-*.txt` (ngoài repo, đã che account ID).
+Bằng chứng nằm ở `keeptrack/Day4/evidence/01…04-*.txt` (ngoài repo, đã che account ID).
 
 **Chưa kiểm chứng:** simulator chỉ đánh giá identity policy, không cho biết provider Pulumi thực sự gọi những API nào.
 Quyền deploy đủ hay thiếu chỉ biết khi `pulumi up` chạy trong CI thật (Chặng 2–3). Ca âm dùng STS, vốn trả cùng một thông báo
@@ -97,7 +100,7 @@ cho role *không tồn tại*; chúng chỉ có ý nghĩa vì role đích đã �
 
 ## Nhật ký lỗi và AccessDenied
 
-Chưa có AccessDenied nào từ CI thật (chưa có job deploy). Các phát hiện ở Chặng 1:
+Chưa có AccessDenied nào từ CI thật. Preview của PR #1 chạy sạch, nhưng stack dev đang 0 resource nên preview gần như chỉ mô phỏng create và hầu như không gọi API đọc: **chưa chứng minh `lab-preview` đủ quyền đọc**. Phép thử thật là preview của một PR sau lần deploy dev đầu tiên (Chặng 3). Các phát hiện ở Chặng 1:
 
 | Khi nào | Nguồn | Hiện tượng | Nguyên nhân / xử lý |
 | --- | --- | --- | --- |
@@ -119,5 +122,59 @@ Khi gặp AccessDenied thật ở Chặng 2–3, thêm một dòng: action thi�
   environment không bảo vệ. Hiện: `dev` và `prod` chỉ cho deploy từ `main`; `preview` không giới hạn branch (role chỉ đọc, dùng cho PR do
   chủ repo kiểm soát); `pr-env` **chưa được tạo**, sẽ tạo với rule phù hợp ở Chặng 4 (đến lúc đó chỉ PR tin cậy trong cùng repo).
   Required reviewers của `prod` làm ở Chặng 3.
-- **Repo private ở tài khoản cá nhân:** Environments tạo được (đã kiểm), nhưng required reviewers và merge queue có thể bị giới hạn
-  theo gói/loại sở hữu; kiểm tra ở Chặng 3 và ghi đúng trạng thái thực nghiệm.
+- **Repo private ở tài khoản cá nhân (gói Free):** tạo Environment và branch policy của environment được (đã kiểm). Đã kiểm bằng API ngày 2026-11-12:
+  - `GET /repos/x-rafael/pulumi-platform-lab/rulesets` và `/branches/main/protection` đều trả 403
+    `Upgrade to GitHub Pro or make this repository public to enable this feature.` Nên **không đặt được required check `unit`**
+    và một check đỏ **không chặn** được merge (chỉ là tín hiệu cho người merge).
+  - Merge queue chỉ có với repo thuộc organization (chủ repo ở đây là `User`), nên trigger `merge_group` trong `ci.yml` **đã viết, chưa kiểm chứng queue**.
+  - Required reviewers của environment `prod` (Chặng 3) có thể gặp cùng giới hạn; kiểm bằng API trước khi tuyên bố gate có tác dụng.
+  Các lựa chọn: chuyển repo public sau khi review nội dung, nâng cấp GitHub Pro, hoặc chấp nhận gate chưa thực nghiệm và ghi đúng như vậy.
+
+## Đăng nhập Pulumi Cloud từ CI (OIDC, không có secret tĩnh)
+
+Pulumi Cloud xác thực riêng; role AWS ở trên không đăng nhập Pulumi hộ. CI dùng **OIDC issuer của Pulumi Cloud** thay vì
+`PULUMI_ACCESS_TOKEN` tĩnh:
+
+```text
+GitHub job → OIDC token (aud urn:pulumi:org:<org>) → Pulumi Cloud → access token ngắn hạn → pulumi preview
+```
+
+Workflow dùng `pulumi/auth-actions` (ghim SHA, v2.1.2): action đổi token của GitHub lấy Pulumi access token (yêu cầu 1800 giây,
+server có thể giảm), tự mask và xuất `PULUMI_ACCESS_TOKEN` cho bước sau. Trong GitHub không có secret Pulumi nào; bước
+`pulumi/actions` **không được** tự đặt `PULUMI_ACCESS_TOKEN` (biến rỗng sẽ ghi đè token vừa xuất).
+
+Cấu hình một lần ở Pulumi Cloud, do chủ organization làm trên giao diện (Settings → Access Management → OIDC Issuers):
+
+| Mục | Giá trị |
+| --- | --- |
+| Register issuer: Name | `github-actions` |
+| Register issuer: URL | `https://token.actions.githubusercontent.com` |
+| Policy: Decision | Allow |
+| Policy: Token type | Personal |
+| Policy: Scope | `user:x-rafael` |
+| Policy: Aud | `urn:pulumi:org:x-rafael-org` |
+| Policy: Sub | `repo:x-rafael@142369851/pulumi-platform-lab@1454985419:environment:preview` |
+
+Ghi chú về policy (theo tài liệu Pulumi):
+
+- Trong giá trị claim, `*` khớp 0 hoặc nhiều ký tự, `?` khớp 0 hoặc 1, `.` khớp đúng 1 ký tự. Sub ở trên không chứa ký tự đặc biệt nên khớp chính xác.
+- Deny luôn thắng Allow; không có policy Allow nào thì bị từ chối. Mỗi environment sau này (`dev`, `prod`, `pr-env`) cần một policy riêng với sub riêng.
+- Tài liệu không có ví dụ cho sub dạng environment hay dạng immutable `@ID`; giá trị trên là sub thật đã quan sát trong run OIDC của GitHub.
+- Loại token: *Personal* dùng được ở mọi gói; *Organization* (Essentials, Pro, Enterprise) và *Team* (Pro, Enterprise) tuỳ gói. Chưa xác minh gói của tài khoản này.
+
+Kiểm chứng phạm vi policy (run 43192266735, `oidc-check.yml`, cùng action và cùng input, chỉ khác sub):
+
+- Job `environment: preview` **nhận được** token (đối chứng dương).
+- Job **không có environment** (sub `…:ref:refs/heads/chang2-ci`) **bị từ chối**: `Invalid response from token exchange 401: Unauthorized (access_denied: unauthorized)`.
+  Điều này loại trừ policy có sub `*` hoặc `repo:…:*`.
+- **Chưa kiểm:** sub của các environment khác (`dev`, `prod`, `pr-env`) và của repo khác. Một mẫu như `…:environment:*` vẫn chưa bị loại trừ; Chặng 3 sẽ thử
+  job `dev` khi chưa có policy cho `dev` (phải bị từ chối). Policy do chủ org nhập trên giao diện, tôi không đọc lại được: hãy đối chiếu bảng trên với giá trị đã lưu.
+
+Rủi ro còn lại (đã nhỏ hơn token tĩnh, nhưng không bằng không):
+
+- Token *Personal* mang quyền của chính chủ trên **mọi stack trong `x-rafael-org`**, kể cả `platform-ci-bootstrap/lab`. Bù lại nó chỉ sống ~30 phút, chỉ cấp
+  cho job khớp policy (ca âm đã kiểm, xem bên dưới), không có gì dài hạn để lộ hay xoay.
+- Policy so khớp theo **environment**, không theo branch. Environment `preview` không giới hạn branch nên job ở bất kỳ branch/PR nào của repo
+  tham chiếu `environment: preview` đều nhận được token. Chỉ chủ repo có quyền ghi; PR từ fork không chạy job `preview`.
+  Phía AWS vẫn bị chặn bởi role `lab-preview` chỉ đọc.
+- Cần Issuer + policy này còn tồn tại; gỡ policy là cắt đường đăng nhập Pulumi của CI.

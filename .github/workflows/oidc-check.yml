@@ -118,3 +118,52 @@ jobs:
           for r in lab-preview lab-deploy-dev lab-deploy-prod lab-pr-env; do
             expect_denied "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${r}"
           done
+
+  # Pulumi Cloud: cùng action, cùng input, chỉ khác sub. Job có environment `preview` phải nhận được token (đối chứng dương);
+  # job không có environment (sub là ref:refs/heads/...) phải bị từ chối. Nếu job thứ hai thành công thì policy ở Pulumi Cloud
+  # đang rộng hơn mức đã ghi trong docs/ci-access.md. Thông báo lỗi cụ thể đọc ở log của bước `exchange`.
+  pulumi-allowed:
+    name: pulumi login allowed (environment preview)
+    runs-on: ubuntu-latest
+    environment: preview
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: pulumi/auth-actions@273044cc19e63ea565285da8edd4e059126a0bdb # v2.1.2
+        with:
+          organization: ${{ vars.PULUMI_ORG }}
+          requested-token-type: urn:pulumi:token-type:access_token:personal
+          scope: user:${{ vars.PULUMI_USER }}
+          token-expiration: 900
+      - name: Token đã được xuất (giá trị bị mask)
+        run: |
+          test -n "${PULUMI_ACCESS_TOKEN:-}" || { echo "::error::no token exported"; exit 1; }
+          echo "OK: PULUMI_ACCESS_TOKEN exported"
+
+  pulumi-no-environment:
+    name: pulumi login denied (no environment)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: exchange
+        id: exchange
+        continue-on-error: true
+        uses: pulumi/auth-actions@273044cc19e63ea565285da8edd4e059126a0bdb # v2.1.2
+        with:
+          organization: ${{ vars.PULUMI_ORG }}
+          requested-token-type: urn:pulumi:token-type:access_token:personal
+          scope: user:${{ vars.PULUMI_USER }}
+          token-expiration: 900
+      - name: Phải bị từ chối
+        env:
+          OUTCOME: ${{ steps.exchange.outcome }}
+        run: |
+          echo "exchange outcome: ${OUTCOME}"
+          if [ "${OUTCOME}" != "failure" ]; then
+            echo "::error::Pulumi Cloud issued a token to a job WITHOUT environment: policy is broader than documented"; exit 1
+          fi
+          if [ -n "${PULUMI_ACCESS_TOKEN:-}" ]; then echo "::error::token exported despite failure"; exit 1; fi
+          echo "OK: denied, no token exported"
