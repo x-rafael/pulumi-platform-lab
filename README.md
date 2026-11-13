@@ -38,8 +38,8 @@ npm run build:handler   # tạo dist/worker.js, Pulumi đọc artifact này khi 
 Unit tests dùng mocks của Pulumi, không gọi AWS.
 
 `infra/config` và `tools/deploy-cli` dùng cùng ba lệnh (`npm ci`, `npm run typecheck`, `npm test`); test của deploy CLI dùng
-adapter giả nên không gọi Pulumi hay AWS. **CI hiện chỉ chạy job `unit` cho `infra/worker`, `infra/bootstrap` và `scripts`**:
-`infra/config` và `tools/deploy-cli` chưa có job.
+adapter giả nên không gọi Pulumi hay AWS. Job `unit` của CI chạy cả năm project (`infra/worker`, `infra/config`,
+`infra/bootstrap`, `scripts`, `tools/deploy-cli`).
 
 ## Stack và environment
 
@@ -115,5 +115,5 @@ PR stack tồn tại tối đa **24 giờ** kể từ lúc tạo (push thêm com
   đều có bằng chứng chạy thật. Xem [docs/ci-access.md](docs/ci-access.md) và [docs/pr-environments.md](docs/pr-environments.md).
 - Có thêm (2026-11-13): project `platform-config` (SSM parameter) + worker đọc qua StackReference, và deploy CLI (preview/apply/check, nhiều domain theo thứ tự phụ thuộc), đều có bằng chứng chạy thật trên `dev`.
 - Giới hạn đã biết: chỉ có một người dùng nên cổng `prod` là owner tự phê duyệt; ruleset `main` bắt buộc check `unit` nhưng chủ repo được bypass; không có merge queue (repo thuộc tài khoản cá nhân).
-- **CI chưa biết về `platform-config`:** job `preview` của CI nhắm stack `dev`, mà stack này giờ có `configStack`, nên token Pulumi của CI phải đọc được `platform-config/dev` (chưa kiểm chứng); role CI không có quyền SSM; `infra/config` và `tools/deploy-cli` chưa có job test; `destroy-dev.yml` chỉ dọn worker. Giải quyết trước khi bật lại `Deploy dev`.
+- **CI và `platform-config`** (kiểm chứng trên PR #7, 2026-11-13): job `preview` (stack `dev`, có `configStack`) đọc được `platform-config/dev` qua StackReference (`11 unchanged`); `unit` chạy được hai project mới; `pr-env` tạo stack PR với `MESSAGE_PREFIX=lab`. Còn lại: role CI không có quyền SSM nên CI deploy được worker nhưng chưa deploy được config; deploy CLI chưa được nối vào workflow deploy; `destroy-dev.yml` chỉ dọn worker và chưa kiểm chứng với stack có StackReference. Giải quyết trước khi bật lại `Deploy dev`.
 - Lịch sử `dev`: 2026-11-12 đã destroy bằng role CI và xác nhận rỗng; 2026-11-13 dựng lại **bằng deploy CLI từ máy local (admin SSO, không phải role CI)**: `platform-worker/dev` 11 resource + 1 StackReference, `platform-config/dev` 1 SSM parameter. Workflow `Deploy dev` **vẫn tắt** (bật lại bằng `gh workflow enable "Deploy dev"`). Còn lại có chủ đích: bootstrap OIDC/roles (owner Rafael) và reaper theo lịch. Xem [docs/runbook.md](docs/runbook.md).
