@@ -101,13 +101,34 @@ const PROVIDER_OUTPUTS: Record<
   },
 };
 
+export interface MockOptions {
+  /**
+   * Output của các stack được tham chiếu bằng StackReference, theo tên đầy đủ của stack
+   * (vd. `example-org/platform-config/dev`). Stack không có trong bảng này trả về không có output nào,
+   * nên `requireOutput` sẽ lỗi giống Pulumi thật khi stack chưa được deploy.
+   */
+  stackReferences?: Record<string, Record<string, unknown>>;
+}
+
+const STACK_REFERENCE_TYPE = "pulumi:pulumi:StackReference";
+
 /** Trả về mocks + danh sách registrations. Tách khỏi `setMocks` để test trực tiếp `call`. */
-export function buildMocks(): { mocks: pulumi.runtime.Mocks; runtime: MockRuntime } {
+export function buildMocks(options: MockOptions = {}): { mocks: pulumi.runtime.Mocks; runtime: MockRuntime } {
   const registrations: Registration[] = [];
 
   const mocks: pulumi.runtime.Mocks = {
     newResource: (args) => {
       const inputs: Inputs = args.inputs ?? {};
+      if (args.type === STACK_REFERENCE_TYPE) {
+        const stackName = String(inputs.name ?? args.name);
+        const state = {
+          name: stackName,
+          outputs: options.stackReferences?.[stackName] ?? {},
+          secretOutputNames: [],
+        };
+        registrations.push({ type: args.type, name: args.name, inputs, state, id: stackName });
+        return { id: stackName, state };
+      }
       const provided = PROVIDER_OUTPUTS[args.type]?.(args.name, inputs);
       const id = provided?.id ?? `${args.name}-id`;
       const state = { ...inputs, ...provided?.state };
@@ -148,8 +169,8 @@ export function buildMocks(): { mocks: pulumi.runtime.Mocks; runtime: MockRuntim
 }
 
 /** Đăng ký mocks đúng một lần cho file test hiện tại. Gọi trước khi import module có resource. */
-export function setupMocks(stack: string = MOCK_STACK): MockRuntime {
-  const { mocks, runtime } = buildMocks();
+export function setupMocks(stack: string = MOCK_STACK, options: MockOptions = {}): MockRuntime {
+  const { mocks, runtime } = buildMocks(options);
   pulumi.runtime.setMocks(mocks, MOCK_PROJECT, stack, false);
   return runtime;
 }

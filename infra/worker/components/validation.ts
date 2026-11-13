@@ -12,6 +12,21 @@ export function requireInteger(field: string, value: number, min: number, max: n
   }
 }
 
+/**
+ * Tên biến môi trường của Lambda: bắt đầu bằng chữ, chỉ gồm chữ/số/gạch dưới, tối thiểu 2 ký tự. Tiền tố `AWS_LAMBDA_`
+ * bị Lambda dành riêng cho runtime; chặn sớm để lỗi lộ ra ở unit test thay vì lúc `pulumi up`.
+ */
+export function requireEnvironmentVariableNames(names: readonly string[]): void {
+  for (const name of names) {
+    if (!/^[A-Za-z][A-Za-z0-9_]+$/.test(name) || name.startsWith("AWS_LAMBDA_")) {
+      throw new Error(
+        `Invalid functionEnvironment name: ${JSON.stringify(name)} ` +
+          "(start with a letter, then letters/digits/underscore, at least 2 chars, not reserved AWS_LAMBDA_*)",
+      );
+    }
+  }
+}
+
 /** Kiểu Record không ép được key, nên kiểm tra lúc chạy. */
 export function requireTags(tags: Record<string, string>): void {
   for (const key of REQUIRED_TAGS) {

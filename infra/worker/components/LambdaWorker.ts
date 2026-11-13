@@ -5,7 +5,13 @@ import {
   QueueWithDlq,
   type QueueWithDlqArgs,
 } from "./QueueWithDlq";
-import { ENVIRONMENTS, type Environment, requireInteger, requireTags } from "./validation";
+import {
+  ENVIRONMENTS,
+  type Environment,
+  requireEnvironmentVariableNames,
+  requireInteger,
+  requireTags,
+} from "./validation";
 
 /**
  * Worker: SQS source queue (+ DLQ) → event source mapping → Lambda handler.
@@ -30,6 +36,12 @@ export interface LambdaWorkerArgs extends Omit<QueueWithDlqArgs, "physicalName">
   timeoutSeconds?: number;
   /** Mặc định 128 (MiB); Lambda cho 128–10240. */
   memorySizeMiB?: number;
+  /**
+   * Biến môi trường của function (vd. `MESSAGE_PREFIX`). Giá trị có thể là Output, như giá trị đọc từ StackReference.
+   * Không đặt secret ở đây: biến môi trường của Lambda không được mã hoá riêng cho từng giá trị trong state/console.
+   * Không truyền (hoặc rỗng) thì function không có khối `environment`.
+   */
+  functionEnvironment?: Readonly<Record<string, pulumi.Input<string>>>;
 }
 
 const DEFAULT_TIMEOUT_SECONDS = 10;
@@ -69,6 +81,7 @@ function resolveArgs(name: string, args: LambdaWorkerArgs): ResolvedArgs {
   requireInteger("timeoutSeconds", resolved.timeoutSeconds, 1, 900);
   requireInteger("memorySizeMiB", resolved.memorySizeMiB, 128, 10_240);
   requireTags(resolved.tags);
+  requireEnvironmentVariableNames(Object.keys(resolved.functionEnvironment ?? {}));
 
   // API yêu cầu visibility timeout >= function timeout. AWS khuyến nghị
   // 6 × timeout + batching window; default của lab (60 >= 6 × 10 + 0) thoả khuyến nghị.
@@ -195,6 +208,11 @@ export class LambdaWorker extends pulumi.ComponentResource {
         code: new pulumi.asset.FileArchive("./dist"),
         timeout: config.timeoutSeconds,
         memorySize: config.memorySizeMiB,
+        // Chỉ có khối environment khi caller truyền biến: stack không dùng nó (vd. PR stack cũ) không bị đổi gì.
+        environment:
+          config.functionEnvironment !== undefined && Object.keys(config.functionEnvironment).length > 0
+            ? { variables: { ...config.functionEnvironment } }
+            : undefined,
         tags: config.tags,
       },
       {
