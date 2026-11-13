@@ -3,20 +3,20 @@
 > Sandbox học tập. Tài liệu này nói cái gì đang chạy, ai sở hữu, và các lệnh để vận hành. Thiết kế quyền nằm ở [ci-access.md](ci-access.md),
 > vòng đời PR environment ở [pr-environments.md](pr-environments.md). Mọi lệnh `gh` dùng `--repo x-rafael/pulumi-platform-lab`.
 
-## Đang chạy gì (ghi nhận 2026-11-13, sau khi dựng lại `dev` bằng deploy CLI)
+## Đang chạy gì (ghi nhận cuối 2026-11-13, sau khi dọn lại `dev` ở cuối Day 5)
 
 | Thành phần | Trạng thái | Chủ sở hữu | Ghi chú |
 | --- | --- | --- | --- |
-| Stack `platform-worker/dev` | **11 resource + 1 StackReference** (SQS + DLQ, Lambda, IAM role, log group, event source mapping); Lambda có `MESSAGE_PREFIX=lab` | Rafael | Dựng lại 2026-11-13 **bằng deploy CLI từ máy local** (admin SSO), không phải role CI. Lần destroy trước (2026-11-12) là bằng role CI `lab-deploy-dev` |
-| Stack `platform-config/dev` | **1 resource**: SSM String parameter `/platform-lab/dev/message-prefix` = `lab`; export `messagePrefix` | Rafael | Tạo bằng `pulumi stack init` (bootstrap có chủ đích) rồi apply bằng deploy CLI từ máy local. Worker đọc output này qua StackReference |
-| Workflow `Deploy dev` | **ĐÃ TẮT** (`disabled_manually`) | Rafael | Nó chạy mỗi lần push vào `main`. Chưa bật lại: workflow đã được viết lại để dùng deploy CLI (`--domain worker --apply`) nhưng chưa chạy thật (cần merge vào `main`, bật workflow rồi dispatch); role CI không có quyền SSM nên CI chưa deploy được `platform-config`. Token Pulumi của job `preview` đã kiểm chứng đọc được `platform-config/dev` (PR #7); với environment `dev` thì chưa kiểm |
+| Stack `platform-worker/dev` | **0 resource** (stack rỗng, còn config và lịch sử) | Rafael | Dựng bằng deploy CLI từ máy local 2026-11-13 rồi `pulumi destroy` từ máy local cùng ngày (admin SSO, không phải role CI). Xác nhận trực tiếp trên AWS: không còn Lambda, queue, log group, IAM role |
+| Stack `platform-config/dev` | **0 resource** (stack rỗng, còn config và lịch sử) | Rafael | SSM parameter `/platform-lab/dev/message-prefix` đã destroy từ máy local. Output `messagePrefix` không còn, nên preview của `platform-worker/dev` đang lỗi cho tới khi deploy lại config |
+| Workflow `Deploy dev` | **ĐÃ TẮT** (`disabled_manually`) | Rafael | Nó chạy mỗi lần push vào `main`. Chưa bật lại (và `dev` đang rỗng, config/dev cũng rỗng nên deploy worker sẽ lỗi thiếu output): workflow đã được viết lại để dùng deploy CLI (`--domain worker --apply`) nhưng chưa chạy thật (cần merge vào `main`, bật workflow rồi dispatch); role CI không có quyền SSM nên CI chưa deploy được `platform-config`. Token Pulumi của job `preview` đã kiểm chứng đọc được `platform-config/dev` (PR #7); với environment `dev` thì chưa kiểm |
 | Stack `platform-worker/prod` | 0 resource (chỉ config) | Rafael | Chưa từng deploy worker prod |
 | Stack `platform-ci-bootstrap/lab` | 11 resource, `protect: true` | Rafael | OIDC provider + 4 role `lab-*` + 4 inline policy. **Giữ lại** cho Day 5/6 |
 | Reaper theo lịch | **BẬT**, dọn thật mỗi 6 giờ | Rafael | Chỉ xét stack `pr-<n>` có tag khớp; hiện có `pr-7` (PR #7, tạo 2026-11-13, hết TTL 24 giờ sau đó nếu PR chưa đóng). Chưa có lần chạy tự động nào được quan sát (kiểm: `gh run list --workflow "PR environment reaper" --event schedule`; lúc không có stack `pr-*` thì chỉ loại `dev`/`prod`, không dispatch gì). GitHub tự tắt workflow theo lịch của repo public sau 60 ngày không có hoạt động trong repo, nên "chạy cho tới khi bạn tắt" chỉ đúng khi repo còn được dùng |
 | Pulumi OIDC issuer `github-actions` | 4 policy (`preview`, `dev`, `prod`, `pr-env`) | Rafael | Cấu hình trên giao diện Pulumi Cloud |
 | GitHub | repo public; secret `AWS_ACCOUNT_ID` (để mask log); ruleset `protect-main` (admin bypass); environment `preview`, `dev`, `prod` (reviewer), `pr-env` | Rafael | |
 
-Chi phí: IAM và SSM Standard parameter không tốn phí; Lambda, SQS và CloudWatch Logs của `dev` đang chạy nhưng không có traffic nên chi phí rất thấp. Vẫn nên dọn khi hết dùng (thứ tự ở cuối tài liệu).
+Chi phí: IAM, SSM Standard parameter và stack rỗng không tốn phí. Chỉ stack PR `pr-7` còn Lambda, SQS và CloudWatch Logs, không có traffic nên chi phí rất thấp, và sẽ được dọn khi PR đóng hoặc hết TTL.
 
 ## Việc thường làm
 
@@ -42,7 +42,7 @@ Chi phí: IAM và SSM Standard parameter không tốn phí; Lambda, SQS và Clou
 | Thiếu artifact khi `pulumi up` | Có bước `npm run build:handler` và `work-dir` đúng chưa (Pulumi đọc `./dist`) |
 | Hai deploy va nhau | Concurrency group `deploy-platform-worker-dev`; cuối cùng là khoá của backend Pulumi |
 | Đóng PR nhưng resource còn | Xem run `PR environment cleanup` của PR đó; thử lại bằng `gh run rerun <id> --failed`; reaper sẽ nhặt lại sau tối đa 6 giờ. **Không xoá state** |
-| Preview worker lỗi `Required output 'messagePrefix' does not exist on stack …` | Stack config chưa được deploy hoặc `configStack` sai. Deploy config trước (`--domain config --apply`) hoặc dùng `--domain all`. Không tạo output giả |
+| Preview worker lỗi `Required output 'messagePrefix' does not exist on stack …` | Stack config chưa được deploy, đã bị destroy (như sau khi dọn Day 5), hoặc `configStack` sai. Deploy config trước (`--domain config --apply`) hoặc dùng `--domain all`. Không tạo output giả |
 | CLI báo `stack … does not exist. This CLI never creates stacks` | Tạo stack có chủ đích: `pulumi stack init <org>/<project>/<stack>`, rồi đặt `aws:region` và `<project>:environment`. CLI không tự tạo |
 | `pulumi up` gõ tay trong `infra/*` trúng stack không định | Deploy CLI dùng `selectStack` nên đổi stack đang chọn của thư mục đó. Khi gõ tay luôn truyền `--stack` |
 | CLI exit `3`, domain `locked` (`[409] Conflict: Another update is currently in progress`) | Stack đang có update khác: một workflow, người khác, hoặc lần chạy trước còn dở. Xem trang Activity của stack trên Pulumi Cloud hoặc `pulumi stack history --stack <org>/<project>/<stack>`, đợi update kia xong rồi chạy lại. CLI không cancel hay phá lock. Diễn tập trên `dev`: `--check` chạy bình thường trong lúc một `--apply` khác đang giữ lock (preview không bị lock của `up` chặn); chưa kiểm preview có tự giữ lock hay không |
