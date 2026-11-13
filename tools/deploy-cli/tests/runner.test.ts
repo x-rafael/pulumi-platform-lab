@@ -5,6 +5,7 @@ import {
     type DomainStatus,
     RunnerError,
     SECRET_PLACEHOLDER,
+    StackLockedError,
     StackMissingError,
     exitCodeFor,
     redactOutputs,
@@ -522,6 +523,77 @@ describe("runRequest: nhiều domain", () => {
     });
 });
 
+describe("stack bị lock bởi update khác (exit 3)", () => {
+    const STACK = "example-org/platform-worker/dev";
+    const locked = () => new StackLockedError(STACK, "error: [409] Conflict: Another update is currently in progress.");
+    const all = (mode: Mode, overrides: Partial<Omit<DeployRequest, "mode">> = {}) =>
+        request(mode, { domain: "all", ...overrides });
+    const statuses = (reports: DomainReport[]) => reports.map((r) => `${r.domain}:${r.status}`);
+    const independent = { config: [], worker: [] } as const;
+
+    it("up bị lock: domain `locked` (không phải failed), lỗi nêu cách xử lý, exit 3, lỗi chỉ log một lần", async () => {
+        const fake = makeFake({ upError: locked() });
+        const { deps, logs } = makeDeps(fake);
+        const [report] = await runRequest(request("apply"), ORG, deps);
+
+        expect(report?.status).toBe("locked");
+        expect(report?.error).toContain("locked by another update");
+        expect(report?.error).toContain("never cancels or breaks another update");
+        expect(exitCodeFor(report ? [report] : [])).toBe(EXIT.STACK_LOCKED);
+        expect(logs.filter((line) => line.includes("locked by another update"))).toHaveLength(1);
+    });
+
+    it("lock ở bước preview của check cũng là `locked`, không phải failed", async () => {
+        const fake = makeFake({ previewError: locked() });
+        const [report] = await runRequest(request("check"), ORG, makeDeps(fake).deps);
+        expect(report?.status).toBe("locked");
+        expect(fake.count("up:")).toBe(0);
+    });
+
+    it("không bao giờ gọi cancel hay up lại để chiếm lock: chỉ đúng một lần thử", async () => {
+        const fake = makeFake({ upError: locked(), previewSummary: { create: 1 } });
+        await runRequest(request("apply"), ORG, makeDeps(fake).deps);
+        expect(fake.count("up:")).toBe(1); // không retry
+        expect(fake.events.some((e) => e.startsWith("cancel"))).toBe(false);
+    });
+
+    it("apply: dependency bị lock → domain phụ thuộc bị skip, exit 3", async () => {
+        const fake = makeFake({ byDomain: { config: { upError: locked() } } });
+        const reports = await runRequest(all("apply"), ORG, makeDeps(fake).deps);
+
+        expect(statuses(reports)).toEqual(["config:locked", "worker:skipped"]);
+        expect(reports[1]?.reason).toBe("dependency config did not succeed (locked)");
+        expect(fake.domainEvents.some((e) => e.startsWith("worker:"))).toBe(false);
+        expect(exitCodeFor(reports)).toBe(EXIT.STACK_LOCKED);
+    });
+
+    it("chỉ đọc: dependency bị lock cũng không cho domain phụ thuộc chạy", async () => {
+        const fake = makeFake({ byDomain: { config: { previewError: locked() } } });
+        const reports = await runRequest(all("check"), ORG, makeDeps(fake).deps);
+        expect(statuses(reports)).toEqual(["config:locked", "worker:skipped"]);
+        expect(exitCodeFor(reports)).toBe(EXIT.STACK_LOCKED);
+    });
+
+    it("lock không che lỗi thật: một domain locked + một domain failed → exit 1", async () => {
+        const fake = makeFake({
+            byDomain: { config: { previewError: locked() }, worker: { previewError: new Error("AccessDenied") } },
+        });
+        const reports = await runRequest(all("check", { parallel: 2 }), ORG, makeDeps(fake).deps, independent);
+        expect(statuses(reports).sort()).toEqual(["config:locked", "worker:failed"]);
+        expect(exitCodeFor(reports)).toBe(EXIT.RUNTIME);
+    });
+
+    it("lock thắng gate: một domain locked + một domain check-changes → exit 3", async () => {
+        const fake = makeFake({
+            previewSummary: { same: 1, update: 1 },
+            byDomain: { config: { previewError: locked() } },
+        });
+        const reports = await runRequest(all("check", { parallel: 2 }), ORG, makeDeps(fake).deps, independent);
+        expect(statuses(reports).sort()).toEqual(["config:locked", "worker:check-changes"]);
+        expect(exitCodeFor(reports)).toBe(EXIT.STACK_LOCKED);
+    });
+});
+
 describe("summarizeCommandFailure", () => {
     // Dạng message thật của CommandError khi profile AWS không tồn tại (đã rút gọn URN).
     const sdkMessage = [
@@ -577,6 +649,14 @@ describe("exitCodeFor", () => {
         // lỗi vận hành thắng gate: cần thấy ngay là có gì hỏng chứ không chỉ là "có thay đổi"
         [["blocked", "failed"], EXIT.RUNTIME],
         [["failed", "skipped"], EXIT.RUNTIME],
+        // lock (3): thắng gate/skip (2) nhưng thua lỗi thật (1)
+        [["locked"], EXIT.STACK_LOCKED],
+        [["locked", "skipped"], EXIT.STACK_LOCKED],
+        [["locked", "blocked"], EXIT.STACK_LOCKED],
+        [["check-changes", "locked"], EXIT.STACK_LOCKED],
+        [["applied-outside-gate", "locked"], EXIT.STACK_LOCKED],
+        [["locked", "failed"], EXIT.RUNTIME],
+        [["failed", "locked"], EXIT.RUNTIME],
     ] as const)("%j → %i", (statuses, expected) => {
         expect(exitCodeFor(statuses.map(report))).toBe(expected);
     });

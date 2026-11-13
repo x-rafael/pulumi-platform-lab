@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { type Io, type RunDeps, run } from "../src/cli";
 import { EXIT, workDirFor } from "../src/config";
-import { RunnerError, StackMissingError } from "../src/runner";
+import { RunnerError, StackLockedError, StackMissingError } from "../src/runner";
 import { type Fake, ORG, clock, makeFake } from "./fakes";
 
 interface Collected {
@@ -142,6 +142,38 @@ describe("run: --domain all (config → worker)", () => {
         const { code } = await collect(["--domain", "all", "--env", "prod", "--apply"], fake);
         expect(code).toBe(EXIT.USAGE);
         expect(fake.events).toEqual([]);
+    });
+});
+
+describe("run: stack đang bị lock → exit 3", () => {
+    const lock = () =>
+        new StackLockedError("example-org/platform-worker/dev", "error: [409] Conflict: Another update is currently in progress.");
+
+    it("--apply: exit 3, stdout vẫn có JSON với domain `locked`, stderr có hướng dẫn, không cancel", async () => {
+        const fake = makeFake({ upError: lock(), previewSummary: { same: 11 } });
+        const { code, out, err } = await collect(["--domain", "worker", "--env", "dev", "--apply"], fake);
+
+        expect(code).toBe(EXIT.STACK_LOCKED);
+        const summary = JSON.parse(out[0] ?? "") as { reports: Array<{ status: string; error: string }>; exitCode: number };
+        expect(summary.exitCode).toBe(EXIT.STACK_LOCKED);
+        expect(summary.reports[0]?.status).toBe("locked");
+        expect(summary.reports[0]?.error).toContain("Another update is currently in progress");
+        expect(err.join("\n")).toMatch(/pulumi stack history --stack example-org\/platform-worker\/dev/);
+        expect(fake.count("up:")).toBe(1);
+    });
+
+    it("--check: exit 3 thay vì exit 1 (lỗi thật) hay 2 (có thay đổi)", async () => {
+        const fake = makeFake({ previewError: lock() });
+        const { code } = await collect(["--domain", "worker", "--env", "dev", "--check"], fake);
+        expect(code).toBe(EXIT.STACK_LOCKED);
+    });
+
+    it("--domain all: config bị lock → worker bị skip, exit 3", async () => {
+        const fake = makeFake({ byDomain: { config: { previewError: lock() } } });
+        const { code, out } = await collect(["--domain", "all", "--env", "dev", "--check"], fake);
+        expect(code).toBe(EXIT.STACK_LOCKED);
+        const summary = JSON.parse(out[0] ?? "") as { reports: Array<{ domain: string; status: string }> };
+        expect(summary.reports.map((r) => `${r.domain}:${r.status}`)).toEqual(["config:locked", "worker:skipped"]);
     });
 });
 

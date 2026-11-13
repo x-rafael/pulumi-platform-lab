@@ -116,6 +116,24 @@ export function summarizeCommandFailure(message: string): string {
 
 const ANSI_ESCAPE = /\u001b\[[0-9;]*[A-Za-z]/g;
 
+/**
+ * Stack đang có một update khác (backend giữ lock). KHÔNG phải lỗi của lệnh này: update kia có thể thuộc một workflow
+ * hoặc người khác đang chạy đúng, nên CLI không bao giờ `cancel` hay phá lock để chiếm chỗ; chỉ báo và để người
+ * vận hành quyết định. cli.ts đổi thành exit 3.
+ */
+export class StackLockedError extends RunnerError {
+    constructor(stackName: string, detail: string, options?: ErrorOptions) {
+        super(
+            `stack ${JSON.stringify(stackName)} is locked by another update. This CLI never cancels or breaks another ` +
+                "update. Check who holds the lock (the stack's Activity page in Pulumi Cloud, or " +
+                `\`pulumi stack history --stack ${stackName}\`), wait for it to finish, then run this again.\n` +
+                `Pulumi said: ${detail}`,
+            options,
+        );
+        this.name = "StackLockedError";
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Báo cáo
 // ---------------------------------------------------------------------------
@@ -130,6 +148,7 @@ export type DomainStatus =
     | "check-clean" // --check: mọi thứ là `same`
     | "check-changes" // --check: có operation khác `same`; `up` không bao giờ được gọi từ đường check
     | "failed" // domain gặp lỗi (provider, credentials, stack thiếu, config lệch...); xem `error`
+    | "locked" // stack đang có update khác; domain này KHÔNG chạy được, thử lại sau; xem `error`
     | "skipped"; // domain không được chạy; xem `reason`
 
 const SUCCESS_STATUSES: readonly DomainStatus[] = ["preview-ok", "applied", "check-clean"];
@@ -161,7 +180,7 @@ export interface DomainReport {
     blockedOperations: string[];
     /** Chỉ có khi `up` đã chạy. */
     update: UpdateReport | null;
-    /** Thông báo lỗi khi status = failed. */
+    /** Thông báo lỗi khi status = failed hoặc locked. */
     error: string | null;
     /** Vì sao domain không chạy khi status = skipped. */
     reason: string | null;
@@ -176,12 +195,19 @@ export function redactOutputs(outputs: Readonly<Record<string, StackOutput>>): R
 }
 
 /**
- * Lỗi vận hành thắng gate: bất kỳ domain failed → 1. Còn lại, mọi thứ không thành công (gate chặn, check thấy thay
- * đổi, `up` vượt gate, domain bị skip) → 2. Không có gì bất thường → 0.
+ * Thứ tự ưu tiên khi nhiều domain có kết quả khác nhau (xem thêm `EXIT`): 1 > 3 > 2 > 0.
+ * - Bất kỳ domain failed → 1: có lỗi thật cần người xem; không để một lock "thử lại sau" che nó.
+ * - Còn lại, bất kỳ domain locked → 3: chỉ cần chờ update kia xong rồi chạy lại.
+ * - Còn lại, mọi thứ không thành công (gate chặn, check thấy thay đổi, `up` vượt gate, domain bị skip) → 2.
+ * - Không có gì bất thường → 0.
+ * (130, người dùng ngắt, đứng trên cả bốn và do cli.ts đặt.)
  */
 export function exitCodeFor(reports: readonly DomainReport[]): number {
     if (reports.some((report) => report.status === "failed")) {
         return EXIT.RUNTIME;
+    }
+    if (reports.some((report) => report.status === "locked")) {
+        return EXIT.STACK_LOCKED;
     }
     return reports.every((report) => isSuccess(report.status)) ? EXIT.OK : EXIT.GATE_BLOCKED;
 }
@@ -378,7 +404,8 @@ async function runDomainSafely(request: DeployRequest, domain: Domain, org: stri
         const message = error instanceof Error ? error.message : String(error);
         deps.log(`error: ${domain}: ${message}`);
         return incompleteReport(request, domain, org, {
-            status: "failed",
+            // Lock không phải lỗi: domain chưa chạy được vì stack đang bận, và người vận hành cần phân biệt hai việc.
+            status: error instanceof StackLockedError ? "locked" : "failed",
             error: message,
             reason: null,
             durationMs: Math.round(deps.now() - startedAt),
@@ -390,10 +417,13 @@ async function runDomainSafely(request: DeployRequest, domain: Domain, org: stri
  * Dependency có cho phép domain phụ thuộc chạy tiếp không.
  * - apply: chỉ khi dependency đã `applied` (không phải blocked, applied-outside-gate, failed, skipped).
  * - preview/check chỉ đọc: miễn dependency chạy được. Check thấy thay đổi ở config không làm worker hết ý nghĩa
- *   (worker đọc output đã deploy của config), nên chỉ failed/skipped mới chặn.
+ *   (worker đọc output đã deploy của config), nên chỉ failed/locked/skipped (domain không chạy được) mới chặn.
  */
 function dependencySatisfied(mode: Mode, report: DomainReport): boolean {
-    return mode === "apply" ? report.status === "applied" : report.status !== "failed" && report.status !== "skipped";
+    if (mode === "apply") {
+        return report.status === "applied";
+    }
+    return report.status !== "failed" && report.status !== "locked" && report.status !== "skipped";
 }
 
 function skipReason(cause: SkipCause, results: ReadonlyMap<string, DomainReport>): string {

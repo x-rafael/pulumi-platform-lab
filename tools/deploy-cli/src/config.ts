@@ -12,7 +12,10 @@ export const EXIT = {
     // Gate chặn thay đổi: --check thấy thay đổi (chặng 2); --apply bị policy chặn trước `up`, hoặc `up` làm
     // điều nằm ngoài gate (chặng 1). Hợp đồng gốc chỉ định nghĩa 2 cho check; mở rộng cho apply có chủ đích.
     GATE_BLOCKED: 2,
-    STACK_LOCKED: 3, // stack đang có update khác
+    // Stack đang có update khác (lock của backend). Chỉ cần chờ update kia xong rồi chạy lại; CLI không cancel update của
+    // người khác. Thứ tự ưu tiên khi nhiều domain khác nhau: 130 > 1 > 3 > 2 > 0, tức một lỗi thật (1) không bị lock
+    // "thử lại sau" (3) che, và lock không bị gate (2) che.
+    STACK_LOCKED: 3,
     USAGE: 64, // cú pháp/đầu vào không hợp lệ (cả apply bị policy từ chối)
     INTERRUPTED: 130, // Ctrl-C
 } as const;
