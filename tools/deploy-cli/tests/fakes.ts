@@ -69,7 +69,12 @@ export function makeFake(options: FakeOptions = {}): Fake {
         }
     };
 
-    const sessionFor = (domain: Domain, behavior: FakeBehavior): StackSession => ({
+    // `cancel` không nằm trong interface StackSession (CLI cố ý không có đường nào để cancel): fake vẫn có nó để test
+    // chứng minh không ai gọi, dù lock hay Ctrl-C.
+    const sessionFor = (domain: Domain, behavior: FakeBehavior): StackSession & { cancel(): Promise<void> } => ({
+        async cancel() {
+            events.push(`cancel:${domain}`);
+        },
         backendUrl: behavior.backendUrl ?? "https://backend.example",
         user: behavior.user ?? "tester",
         async readConfig(keys) {

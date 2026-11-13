@@ -153,12 +153,19 @@ export type SkipCause =
     /** Một dependency không đạt `isSatisfied` (đã lỗi, bị chặn, hoặc chính nó bị skip). */
     | { kind: "dependency"; node: string }
     /** failFast: một node trước đó không đạt, nên không bắt đầu node mới. */
-    | { kind: "halted"; node: string };
+    | { kind: "halted"; node: string }
+    /** Người dùng yêu cầu dừng (Ctrl-C): không bắt đầu node mới. Node đang chạy vẫn được đợi và ghi nhận. */
+    | { kind: "interrupted" };
 
 export interface RunGraphOptions<R> {
     graph: DependencyGraph;
     /** Số node độc lập tối đa chạy cùng lúc. */
     limit: number;
+    /**
+     * Đầu vào dừng do bên ngoài (người dùng) yêu cầu, tách khỏi `failFast`. Khi đã abort: node chưa bắt đầu thành
+     * `skipped` (nguyên nhân `interrupted`), node đang chạy được đợi và ghi nhận. Không huỷ gì đang chạy.
+     */
+    stopSignal?: AbortSignal;
     /**
      * true: sau node đầu tiên không đạt, không bắt đầu node mới (node đã chạy vẫn được đợi và ghi nhận).
      * false: node không phụ thuộc vào node hỏng vẫn tiếp tục.
@@ -199,7 +206,10 @@ export async function runGraph<R>(options: RunGraphOptions<R>): Promise<Map<stri
                 const result = results.get(dependency);
                 return result === undefined || !options.isSatisfied(result);
             });
-            if (blocker !== undefined) {
+            if (options.stopSignal?.aborted === true) {
+                // Ý người dùng (dừng lại) là nguyên nhân chính, nên đứng trước lý do dependency/halted.
+                results.set(node, options.skipped(node, { kind: "interrupted" }, results));
+            } else if (blocker !== undefined) {
                 // Lý do cụ thể (phụ thuộc vào node nào) hữu ích hơn lý do chung "đã dừng", nên được ưu tiên.
                 results.set(node, options.skipped(node, { kind: "dependency", node: blocker }, results));
             } else if (halted !== undefined) {
@@ -212,6 +222,12 @@ export async function runGraph<R>(options: RunGraphOptions<R>): Promise<Map<stri
         try {
             await runWithLimit(
                 runnable.map((node) => async () => {
+                    // Có thể bị ngắt trong lúc node này đang xếp hàng chờ slot: lúc đó nó chưa bắt đầu nên được skip.
+                    if (options.stopSignal?.aborted === true) {
+                        const skipped = options.skipped(node, { kind: "interrupted" }, results);
+                        results.set(node, skipped);
+                        return skipped;
+                    }
                     const result = await options.run(node);
                     // Ghi nhận trước khi throw: runWithLimit chỉ trả lỗi đầu tiên.
                     results.set(node, result);

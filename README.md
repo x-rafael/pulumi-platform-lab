@@ -101,7 +101,14 @@ npm run -s deploy -- --domain all --env dev --apply     # preview rồi up khi p
 - **Gate:** `--apply` chỉ chạy `up` khi preview chỉ gồm `same/create/update/read/refresh` (chặn delete và replace); `--check`
   chặt hơn: báo mọi operation khác `same`. Preview rồi `up` không phải một transaction; CLI chạy lại policy trên kết quả thật của `up`.
 - **Exit code:** `0` thành công · `1` lỗi vận hành hoặc config (có domain `failed`) · `2` gate chặn, check thấy thay đổi, hoặc domain bị
-  skip · `64` input sai hoặc `--apply` bị từ chối. Mã `3` (stack đang bị lock) và `130` (Ctrl-C) chưa làm.
+  skip · `3` stack đang bị lock bởi update khác (domain `locked`; CLI **không bao giờ** cancel hay phá lock, chỉ báo và chờ bạn chạy lại) ·
+  `64` input sai hoặc `--apply` bị từ chối · `130` bị ngắt bằng Ctrl-C. Khi nhiều domain có kết quả khác nhau thì ưu tiên
+  `130 > 1 > 3 > 2 > 0`: lỗi thật không bị lock che, lock không bị gate che.
+- **Ctrl-C không phải rollback.** Lần đầu: CLI không bắt đầu domain mới, đợi domain đang chạy, vẫn in JSON (`interrupted: true`), exit 130.
+  Chốt chặn: nếu bị ngắt giữa preview và `up` thì `up` **không** được bắt đầu. Lần thứ hai: thoát ngay, một update có thể còn dang dở.
+  CLI không gọi `cancel` (chỉ process sở hữu một update mới có quyền cancel nó). Trước lần apply kế tiếp: xem `pulumi stack history`,
+  resource thật và `pending_operations` trong `pulumi stack export`, rồi reconcile theo bằng chứng. Chưa kiểm chứng: trong terminal,
+  Ctrl-C có thể cũng đến tiến trình `pulumi` con, vốn có cách huỷ riêng của nó.
 - `selectStack` làm đổi stack đang chọn của thư mục `infra/*`: khi gõ `pulumi` tay luôn truyền `--stack`.
 
 ## Quy ước dọn dẹp (TTL 24 giờ)

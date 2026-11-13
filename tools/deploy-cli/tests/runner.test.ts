@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { type DeployRequest, EXIT, type Mode, workDirFor } from "../src/config";
 import {
+    INTERRUPT_RECOVERY,
     type DomainReport,
     type DomainStatus,
     RunnerError,
@@ -591,6 +592,114 @@ describe("stack bị lock bởi update khác (exit 3)", () => {
         const reports = await runRequest(all("check", { parallel: 2 }), ORG, makeDeps(fake).deps, independent);
         expect(statuses(reports).sort()).toEqual(["config:locked", "worker:check-changes"]);
         expect(exitCodeFor(reports)).toBe(EXIT.STACK_LOCKED);
+    });
+});
+
+describe("Ctrl-C: dừng nhẹ nhàng, không cancel, không rollback", () => {
+    const all = (mode: Mode, overrides: Partial<Omit<DeployRequest, "mode">> = {}) =>
+        request(mode, { domain: "all", ...overrides });
+    const statuses = (reports: DomainReport[]) => reports.map((r) => `${r.domain}:${r.status}`);
+    const withSignal = (fake: ReturnType<typeof makeFake>, signal: AbortSignal) => {
+        const made = makeDeps(fake);
+        return { ...made, deps: { ...made.deps, signal } };
+    };
+
+    it("đã bị ngắt từ trước: không select gì, mọi domain skipped, log nói rõ không có gì đang chạy", async () => {
+        const stop = new AbortController();
+        stop.abort();
+        const fake = makeFake();
+        const { deps, logs } = withSignal(fake, stop.signal);
+
+        const reports = await runRequest(all("check"), ORG, deps);
+
+        expect(fake.events.filter((e) => !e.startsWith("log:"))).toEqual([]);
+        expect(statuses(reports)).toEqual(["config:skipped", "worker:skipped"]);
+        expect(reports[0]?.reason).toMatch(/interrupted by the user/);
+        expect(logs.join("\n")).toContain("interrupted: nothing is running; not starting anything new");
+        expect(logs).toContain(INTERRUPT_RECOVERY);
+    });
+
+    it("bị ngắt khi config đang preview: config được ĐỢI và ghi nhận, worker không bắt đầu, log nêu rõ đang đợi gì", async () => {
+        const stop = new AbortController();
+        const gate = deferred();
+        const fake = makeFake({ previewSummary: { same: 1 }, byDomain: { config: { previewGate: gate.promise } } });
+        const { deps, logs } = withSignal(fake, stop.signal);
+
+        const running = runRequest(all("check"), ORG, deps);
+        await flush();
+        stop.abort();
+        gate.resolve();
+        const reports = await running;
+
+        expect(statuses(reports)).toEqual(["config:check-clean", "worker:skipped"]);
+        expect(reports[1]?.reason).toMatch(/not started: interrupted by the user/);
+        expect(fake.domainEvents.some((e) => e.startsWith("worker:"))).toBe(false);
+        expect(logs.join("\n")).toContain("interrupted: not starting anything new; waiting for config (preview) to finish");
+        expect(logs).toContain(INTERRUPT_RECOVERY); // hướng dẫn kiểm tra trước lần apply kế tiếp
+    });
+
+    it("runRequest CHƯA xong khi thao tác đang chạy chưa xong: ngắt không bỏ rơi việc dở", async () => {
+        const stop = new AbortController();
+        const gate = deferred();
+        const fake = makeFake({ previewSummary: { same: 1 }, byDomain: { config: { previewGate: gate.promise } } });
+        let settled = false;
+        const running = runRequest(all("check"), ORG, withSignal(fake, stop.signal).deps).then((r) => {
+            settled = true;
+            return r;
+        });
+
+        await flush();
+        stop.abort();
+        await flush();
+        expect(settled).toBe(false);
+        gate.resolve();
+        await running;
+        expect(settled).toBe(true);
+    });
+
+    it("apply bị ngắt khi đang preview: KHÔNG bắt đầu `up` (thao tác ghi mới), ghi rõ chưa apply gì", async () => {
+        const stop = new AbortController();
+        const gate = deferred();
+        const fake = makeFake({ previewSummary: { create: 1 }, previewGate: gate.promise });
+        const { deps, logs } = withSignal(fake, stop.signal);
+
+        const running = runRequest(request("apply"), ORG, deps);
+        await flush();
+        stop.abort();
+        gate.resolve();
+        const [report] = await running;
+
+        expect(fake.count("up:")).toBe(0);
+        expect(report?.status).toBe("skipped");
+        expect(report?.reason).toBe("interrupted after preview: up was not started, nothing was applied");
+        expect(report?.changeSummary).toEqual({ create: 1 }); // preview đã chạy xong nên giữ kết quả
+        expect(report?.update).toBeNull();
+        expect(logs.join("\n")).toContain("up was not started; nothing was applied");
+    });
+
+    it("không bao giờ gọi cancel: ngắt giữa chừng không có đường nào tới cancel", async () => {
+        const stop = new AbortController();
+        const gate = deferred();
+        const fake = makeFake({ byDomain: { config: { previewGate: gate.promise } } });
+
+        const running = runRequest(all("apply"), ORG, withSignal(fake, stop.signal).deps);
+        await flush();
+        stop.abort();
+        gate.resolve();
+        await running;
+
+        expect(fake.events.some((e) => e.startsWith("cancel"))).toBe(false);
+    });
+
+    it("listener abort được gỡ sau khi xong: abort muộn không log thêm gì", async () => {
+        const stop = new AbortController();
+        const fake = makeFake({ previewSummary: { same: 1 } });
+        const { deps, logs } = withSignal(fake, stop.signal);
+
+        await runRequest(request("check"), ORG, deps);
+        const before = logs.length;
+        stop.abort();
+        expect(logs).toHaveLength(before);
     });
 });
 

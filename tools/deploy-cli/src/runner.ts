@@ -78,6 +78,12 @@ export interface RunnerDeps {
     log: (line: string) => void;
     /** Đoạn output thô của engine (stderr). */
     progress: (chunk: string) => void;
+    /**
+     * Người dùng yêu cầu dừng (Ctrl-C). Khi abort: không bắt đầu domain mới; domain đang chạy được đợi và ghi nhận.
+     * KHÔNG huỷ gì đang chạy và KHÔNG gọi cancel: chỉ process nào sở hữu một update mới có quyền cancel nó, và
+     * lab này chưa xác minh được quyền sở hữu đó.
+     */
+    signal?: AbortSignal;
 }
 
 /** Lỗi vận hành đã biết, message đủ để người đọc xử lý. cli.ts đổi thành exit 1. */
@@ -220,6 +226,28 @@ function assertNever(value: never): never {
 // Chạy
 // ---------------------------------------------------------------------------
 
+type Track = (operation: string | null) => void;
+
+/** Bọc session để ghi lại thao tác đang chạy (cho thông báo khi bị ngắt). Không đổi hành vi. */
+function withActivity(session: StackSession, track: Track): StackSession {
+    return {
+        backendUrl: session.backendUrl,
+        user: session.user,
+        readConfig: (keys) => {
+            track("config read");
+            return session.readConfig(keys);
+        },
+        preview: (options) => {
+            track("preview");
+            return session.preview(options);
+        },
+        up: (options) => {
+            track("up");
+            return session.up(options);
+        },
+    };
+}
+
 /** Đối chiếu config của stack với environment người dùng yêu cầu. Khác nhau thì báo lỗi, không tự sửa config. */
 async function verifyConfig(session: StackSession, target: StackTarget): Promise<string> {
     const environmentKey = `${target.project}:environment`;
@@ -248,6 +276,7 @@ export async function runDomain(
     domain: Domain,
     org: string,
     deps: RunnerDeps,
+    track: Track = () => undefined,
 ): Promise<DomainReport> {
     const startedAt = deps.now();
     const target: StackTarget = {
@@ -258,7 +287,8 @@ export async function runDomain(
         workDir: workDirFor(domain),
     };
 
-    const session = await deps.opener.select(target);
+    track("select stack");
+    const session = withActivity(await deps.opener.select(target), track);
     const region = await verifyConfig(session, target);
 
     // Thông tin định danh trước mọi operation. Chỉ in giá trị không bí mật.
@@ -308,6 +338,21 @@ export async function runDomain(
                     blockedOperations: blocked,
                     update: null,
                 });
+            }
+
+            // `up` ghi vào hạ tầng nên là một thao tác MỚI: nếu người dùng đã yêu cầu dừng (Ctrl-C) trong lúc preview,
+            // không bắt đầu nó. Preview chỉ đọc nên đã chạy xong thì giữ kết quả. Không cần rollback vì chưa ghi gì.
+            if (deps.signal?.aborted === true) {
+                deps.log("interrupted after preview: up was not started; nothing was applied");
+                return {
+                    ...finish({
+                        status: "skipped",
+                        changeSummary: preview.changeSummary,
+                        blockedOperations: [],
+                        update: null,
+                    }),
+                    reason: "interrupted after preview: up was not started, nothing was applied",
+                };
             }
 
             deps.log("running up");
@@ -396,10 +441,23 @@ function incompleteReport(
  * Chạy một domain; mọi lỗi dự kiến (provider, credentials, stack thiếu, config lệch) thành báo cáo `failed` thay vì
  * throw, để các domain khác vẫn được ghi nhận. Mỗi lỗi chỉ được log MỘT lần, ở đây.
  */
-async function runDomainSafely(request: DeployRequest, domain: Domain, org: string, deps: RunnerDeps): Promise<DomainReport> {
+async function runDomainSafely(
+    request: DeployRequest,
+    domain: Domain,
+    org: string,
+    deps: RunnerDeps,
+    running: Map<Domain, string>,
+): Promise<DomainReport> {
     const startedAt = deps.now();
+    const track: Track = (operation) => {
+        if (operation === null) {
+            running.delete(domain);
+        } else {
+            running.set(domain, operation);
+        }
+    };
     try {
-        return await runDomain(request, domain, org, deps);
+        return await runDomain(request, domain, org, deps, track);
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         deps.log(`error: ${domain}: ${message}`);
@@ -410,6 +468,8 @@ async function runDomainSafely(request: DeployRequest, domain: Domain, org: stri
             reason: null,
             durationMs: Math.round(deps.now() - startedAt),
         });
+    } finally {
+        track(null);
     }
 }
 
@@ -427,10 +487,23 @@ function dependencySatisfied(mode: Mode, report: DomainReport): boolean {
 }
 
 function skipReason(cause: SkipCause, results: ReadonlyMap<string, DomainReport>): string {
-    return cause.kind === "dependency"
-        ? `dependency ${cause.node} did not succeed (${results.get(cause.node)?.status ?? "unknown"})`
-        : `not started: ${cause.node} did not succeed and apply stops at the first failure`;
+    switch (cause.kind) {
+        case "dependency":
+            return `dependency ${cause.node} did not succeed (${results.get(cause.node)?.status ?? "unknown"})`;
+        case "halted":
+            return `not started: ${cause.node} did not succeed and apply stops at the first failure`;
+        case "interrupted":
+            return "not started: interrupted by the user (nothing of this domain ran, so there is nothing to roll back)";
+        default:
+            return assertNever(cause);
+    }
 }
+
+/** Việc cần làm sau khi bị ngắt, trước lần apply kế tiếp. */
+export const INTERRUPT_RECOVERY =
+    "after an interrupt, before the next apply: check the update history (`pulumi stack history`), the live resources " +
+    "and any pending operations (`pulumi stack export`, field pending_operations), then reconcile from that evidence. " +
+    "Interrupting rolls nothing back, and this CLI did not cancel any update.";
 
 /**
  * Chạy các domain được chọn theo đồ thị phụ thuộc, từng đợt, tối đa `request.parallel` domain độc lập cùng lúc.
@@ -450,11 +523,27 @@ export async function runRequest(
         stackNameFor(org, domain, request.env); // validate cho mọi domain trước khi chạm vào thứ gì
     }
 
+    // Domain nào đang chạy thao tác nào: để khi bị ngắt, ghi rõ CLI đang đợi gì.
+    const running = new Map<Domain, string>();
+    const announceInterrupt = (): void => {
+        const inFlight = [...running].map(([domain, operation]) => `${domain} (${operation})`);
+        deps.log(
+            inFlight.length > 0
+                ? `interrupted: not starting anything new; waiting for ${inFlight.join(", ")} to finish`
+                : "interrupted: nothing is running; not starting anything new",
+        );
+    };
+    deps.signal?.addEventListener("abort", announceInterrupt, { once: true });
+    if (deps.signal?.aborted === true) {
+        announceInterrupt();
+    }
+
     const results = await runGraph<DomainReport>({
         graph,
         limit: request.parallel,
         failFast: request.mode === "apply",
-        run: (node) => runDomainSafely(request, asDomain(node), org, deps),
+        stopSignal: deps.signal,
+        run: (node) => runDomainSafely(request, asDomain(node), org, deps, running),
         isSatisfied: (report) => dependencySatisfied(request.mode, report),
         skipped: (node, cause, done) => {
             const reason = skipReason(cause, done);
@@ -467,6 +556,11 @@ export async function runRequest(
             });
         },
     });
+
+    deps.signal?.removeEventListener("abort", announceInterrupt);
+    if (deps.signal?.aborted === true) {
+        deps.log(INTERRUPT_RECOVERY);
+    }
 
     return deployOrder(graph).flatMap((node) => {
         const report = results.get(node);

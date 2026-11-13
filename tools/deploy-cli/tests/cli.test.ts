@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { type Io, type RunDeps, run } from "../src/cli";
 import { EXIT, workDirFor } from "../src/config";
 import { RunnerError, StackLockedError, StackMissingError } from "../src/runner";
-import { type Fake, ORG, clock, makeFake } from "./fakes";
+import { type Fake, ORG, clock, deferred, flush, makeFake } from "./fakes";
 
 interface Collected {
     code: number;
@@ -142,6 +142,77 @@ describe("run: --domain all (config → worker)", () => {
         const { code } = await collect(["--domain", "all", "--env", "prod", "--apply"], fake);
         expect(code).toBe(EXIT.USAGE);
         expect(fake.events).toEqual([]);
+    });
+});
+
+describe("run: Ctrl-C → exit 130", () => {
+    async function runWithSignal(argv: string[], fake: Fake, signal: AbortSignal) {
+        const out: string[] = [];
+        const err: string[] = [];
+        const io: Io = { out: (l) => out.push(l), err: (l) => err.push(l), raw: () => undefined };
+        const code = await run(argv, io, { opener: fake.opener, env: { PULUMI_ORG: ORG }, now: clock(0), signal });
+        return { code, out, err };
+    }
+    type Summary = { interrupted: boolean; exitCode: number; reports: Array<{ domain: string; status: string; reason: string | null }> };
+
+    it("đã bị ngắt từ trước: exit 130, không chạm opener, JSON nói rõ interrupted và mọi domain skipped", async () => {
+        const stop = new AbortController();
+        stop.abort();
+        const fake = makeFake();
+        const { code, out } = await runWithSignal(["--domain", "all", "--env", "dev", "--check"], fake, stop.signal);
+
+        expect(code).toBe(EXIT.INTERRUPTED);
+        expect(fake.events).toEqual([]);
+        const summary = JSON.parse(out[0] ?? "") as Summary;
+        expect(summary.interrupted).toBe(true);
+        expect(summary.exitCode).toBe(130);
+        expect(summary.reports.map((r) => r.status)).toEqual(["skipped", "skipped"]);
+    });
+
+    it("bị ngắt giữa chừng: exit 130 dù domain đang chạy kết thúc bình thường; vẫn in JSON và hướng dẫn khôi phục", async () => {
+        const stop = new AbortController();
+        const gate = deferred();
+        const fake = makeFake({ previewSummary: { same: 1 }, byDomain: { config: { previewGate: gate.promise } } });
+
+        const running = runWithSignal(["--domain", "all", "--env", "dev", "--check"], fake, stop.signal);
+        await flush();
+        stop.abort();
+        gate.resolve();
+        const { code, out, err } = await running;
+
+        expect(code).toBe(EXIT.INTERRUPTED);
+        const summary = JSON.parse(out[0] ?? "") as Summary;
+        expect(summary.reports.map((r) => `${r.domain}:${r.status}`)).toEqual(["config:check-clean", "worker:skipped"]);
+        expect(summary.interrupted).toBe(true);
+        expect(err.join("\n")).toMatch(/Interrupting rolls nothing back, and this CLI did not cancel any update/);
+        expect(fake.events.some((e) => e.startsWith("cancel"))).toBe(false);
+    });
+
+    it("130 thắng cả lỗi thật: domain đang chạy lỗi lúc bị ngắt vẫn ra 130, JSON ghi rõ failed", async () => {
+        const stop = new AbortController();
+        const gate = deferred();
+        const fake = makeFake({
+            byDomain: { config: { previewGate: gate.promise, previewError: new Error("AccessDenied") } },
+        });
+
+        const running = runWithSignal(["--domain", "all", "--env", "dev", "--check"], fake, stop.signal);
+        await flush();
+        stop.abort();
+        gate.resolve();
+        const { code, out } = await running;
+
+        expect(code).toBe(EXIT.INTERRUPTED);
+        const summary = JSON.parse(out[0] ?? "") as Summary;
+        expect(summary.reports.map((r) => `${r.domain}:${r.status}`)).toEqual(["config:failed", "worker:skipped"]);
+    });
+
+    it("không bị ngắt: interrupted=false và exit code bình thường", async () => {
+        const stop = new AbortController();
+        const fake = makeFake({ previewSummary: { same: 1 } });
+        const { code, out } = await runWithSignal(["--domain", "worker", "--env", "dev", "--check"], fake, stop.signal);
+
+        expect(code).toBe(EXIT.OK);
+        expect((JSON.parse(out[0] ?? "") as Summary).interrupted).toBe(false);
     });
 });
 

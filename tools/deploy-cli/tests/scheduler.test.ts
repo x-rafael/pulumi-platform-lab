@@ -423,6 +423,103 @@ describe("runGraph", () => {
         expect(results.get("later")?.skipped).toEqual({ kind: "dependency", node: "a" });
     });
 
+    describe("stopSignal (Ctrl-C), tách khỏi failFast", () => {
+        it("đã abort từ trước: không node nào chạy, tất cả skipped `interrupted`", async () => {
+            const stop = new AbortController();
+            stop.abort();
+            const ran: string[] = [];
+            const results = await runGraph({
+                ...makeOptions({
+                    graph: { a: [], b: ["a"] },
+                    run: async (node) => {
+                        ran.push(node);
+                        return { node, ok: true };
+                    },
+                }),
+                stopSignal: stop.signal,
+            });
+
+            expect(ran).toEqual([]);
+            expect(results.get("a")?.skipped).toEqual({ kind: "interrupted" });
+            expect(results.get("b")?.skipped).toEqual({ kind: "interrupted" });
+        });
+
+        it("abort khi một node đang chạy: node đó được ĐỢI và ghi nhận; node chưa bắt đầu và đợt sau bị skip", async () => {
+            const stop = new AbortController();
+            const gate = deferred();
+            const started: string[] = [];
+
+            const running = runGraph({
+                ...makeOptions({
+                    graph: { a: [], b: [], c: [], later: ["a"] },
+                    limit: 1,
+                    run: async (node) => {
+                        started.push(node);
+                        await gate.promise;
+                        return { node, ok: true };
+                    },
+                }),
+                stopSignal: stop.signal,
+            });
+
+            await flush();
+            expect(started).toEqual(["a"]);
+            stop.abort();
+            gate.resolve();
+            const results = await running;
+
+            expect(started).toEqual(["a"]); // b, c, later không bao giờ bắt đầu
+            expect(results.get("a")).toEqual({ node: "a", ok: true }); // đang chạy: được ghi nhận
+            expect(results.get("b")?.skipped).toEqual({ kind: "interrupted" });
+            expect(results.get("c")?.skipped).toEqual({ kind: "interrupted" });
+            // later phụ thuộc a (đã thành công) nên không phải lỗi dependency: nguyên nhân là bị ngắt.
+            expect(results.get("later")?.skipped).toEqual({ kind: "interrupted" });
+        });
+
+        it("nhiều node đang chạy cùng lúc đều được đợi và ghi nhận", async () => {
+            const stop = new AbortController();
+            const gates = { a: deferred(), b: deferred() };
+            const running = runGraph({
+                ...makeOptions({
+                    graph: { a: [], b: [], c: [] },
+                    limit: 2,
+                    run: async (node) => {
+                        await gates[node as "a" | "b"]?.promise;
+                        return { node, ok: true };
+                    },
+                }),
+                stopSignal: stop.signal,
+            });
+
+            await flush();
+            stop.abort();
+            gates.a.resolve();
+            gates.b.resolve();
+            const results = await running;
+
+            expect(results.get("a")?.ok).toBe(true);
+            expect(results.get("b")?.ok).toBe(true);
+            expect(results.get("c")?.skipped).toEqual({ kind: "interrupted" });
+        });
+
+        it("ngắt thắng lý do dependency/halted: người dùng đã yêu cầu dừng", async () => {
+            const stop = new AbortController();
+            stop.abort();
+            const results = await runGraph({
+                ...makeOptions({ graph: { a: [], b: ["a"] }, failFast: true, run: async (node) => ({ node, ok: false }) }),
+                stopSignal: stop.signal,
+            });
+            expect(results.get("b")?.skipped).toEqual({ kind: "interrupted" });
+        });
+
+        it("không có stopSignal: hành vi cũ giữ nguyên", async () => {
+            const results = await runGraph(
+                makeOptions({ graph: { a: [], b: ["a"] }, run: async (node) => ({ node, ok: true }) }),
+            );
+            expect(results.get("b")?.ok).toBe(true);
+        });
+    });
+
     it("run throw (lỗi lập trình) làm hỏng cả lượt thay vì bị nuốt", async () => {
         await expect(
             runGraph(

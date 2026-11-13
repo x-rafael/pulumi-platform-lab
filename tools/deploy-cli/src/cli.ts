@@ -1,5 +1,6 @@
 import { automationOpener } from "./adapter";
 import { EXIT, USAGE, UsageError, assertApplyAllowed, parseArgs, requireOrg } from "./config";
+import { createInterruptHandler } from "./interrupt";
 import { type StackOpener, exitCodeFor, runRequest } from "./runner";
 
 /** Kênh in ra ngoài; tests thay bằng bộ thu thập thay vì console. stdout chỉ dành cho JSON summary. */
@@ -18,6 +19,8 @@ export interface RunDeps {
     env: Readonly<Record<string, string | undefined>>;
     /** Đồng hồ đơn điệu, ms. */
     now: () => number;
+    /** Người dùng yêu cầu dừng (Ctrl-C). Do main guard đăng ký; test tự abort. Xem `RunnerDeps.signal`. */
+    signal?: AbortSignal;
 }
 
 /**
@@ -35,9 +38,13 @@ export async function run(argv: readonly string[], io: Io, deps: RunDeps): Promi
             now: deps.now,
             log: io.err,
             progress: io.raw,
+            signal: deps.signal,
         });
-        const exitCode = exitCodeFor(reports);
-        io.out(JSON.stringify({ request, reports, exitCode }, null, 2));
+        // Bị ngắt thì 130 thắng mọi kết quả khác (ưu tiên 130 > 1 > 3 > 2 > 0). JSON vẫn được in: CI/người đọc cần biết
+        // domain nào đã chạy xong, domain nào bị skip, để quyết định bước khôi phục.
+        const interrupted = deps.signal?.aborted === true;
+        const exitCode = interrupted ? EXIT.INTERRUPTED : exitCodeFor(reports);
+        io.out(JSON.stringify({ request, reports, interrupted, exitCode }, null, 2));
         return exitCode;
     } catch (error) {
         if (error instanceof UsageError) {
@@ -54,6 +61,15 @@ export async function run(argv: readonly string[], io: Io, deps: RunDeps): Promi
 // Chỉ chạy khi được gọi trực tiếp (`tsx src/cli.ts`), không chạy khi tests import `run`.
 // Deps thật chỉ được dựng ở đây: một test quên truyền deps sẽ lỗi biên dịch thay vì chạy Pulumi thật.
 if (typeof require !== "undefined" && typeof module !== "undefined" && require.main === module) {
+    // Chỉ ở đây mới đăng ký signal thật. Lần Ctrl-C đầu yêu cầu dừng nhẹ nhàng, lần hai thoát ngay (xem interrupt.ts).
+    const stop = new AbortController();
+    const onSigint = createInterruptHandler({
+        requestStop: () => stop.abort(),
+        log: (line) => console.error(line),
+        exitNow: (code) => process.exit(code),
+    });
+    process.on("SIGINT", onSigint);
+
     run(
         process.argv.slice(2),
         {
@@ -61,7 +77,7 @@ if (typeof require !== "undefined" && typeof module !== "undefined" && require.m
             err: (line) => console.error(line),
             raw: (chunk) => process.stderr.write(chunk),
         },
-        { opener: automationOpener, env: process.env, now: () => performance.now() },
+        { opener: automationOpener, env: process.env, now: () => performance.now(), signal: stop.signal },
     ).then(
         (code) => {
             process.exitCode = code;
@@ -71,5 +87,8 @@ if (typeof require !== "undefined" && typeof module !== "undefined" && require.m
             console.error(`error: unexpected failure: ${error instanceof Error ? error.stack : String(error)}`);
             process.exitCode = EXIT.RUNTIME;
         },
-    );
+    ).finally(() => {
+        // Gỡ listener để sau khi xong, Ctrl-C lại có hành vi mặc định và process thoát tự nhiên.
+        process.off("SIGINT", onSigint);
+    });
 }
