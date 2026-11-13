@@ -3,7 +3,8 @@ name: Deploy dev
 # Push vào main -> deploy stack dev của worker. Cũng chạy tay được (workflow_dispatch): environment `dev` chỉ cho
 # deploy từ `main`, nên dispatch từ branch khác bị từ chối ở ranh giới environment.
 #
-# Trình tự: build -> assume role `lab-deploy-dev` (OIDC) -> đăng nhập Pulumi Cloud (OIDC) -> preview -> up -> verify.
+# Trình tự: build -> assume role `lab-deploy-dev` (OIDC) -> đăng nhập Pulumi Cloud (OIDC) -> deploy CLI (preview có refresh,
+# chặn delete/replace, rồi up) -> verify. Chỉ domain worker: role CI chưa có quyền SSM nên chưa deploy được config.
 # `verify` gửi một message thật vào queue và đợi dòng log {"status":"processed","eventId":...} của Lambda.
 #
 # Chống deploy chồng nhau, hai lớp KHÁC NHAU:
@@ -74,26 +75,37 @@ jobs:
           scope: user:${{ vars.PULUMI_USER }}
           token-expiration: 3000
 
-      - name: preview
+      # Deploy CLI gọi `pulumi` qua Automation API nên CLI phải có trên PATH. Bỏ `command` nghĩa là action chỉ cài CLI
+      # (README của pulumi/actions, mục "Installation Only").
+      - name: "build: install Pulumi CLI"
         uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
         with:
-          command: preview
-          stack-name: ${{ vars.PULUMI_STACK_DEV }}
-          work-dir: infra/worker
           pulumi-version: '3.274.1'
-          diff: true
-          refresh: true
-          comment-on-pr: false
+      - name: "build: install deploy CLI"
+        working-directory: tools/deploy-cli
+        run: npm ci
 
-      - name: up
-        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
-        with:
-          command: up
-          stack-name: ${{ vars.PULUMI_STACK_DEV }}
-          work-dir: infra/worker
-          pulumi-version: '3.274.1'
-          refresh: true
-          comment-on-pr: false
+      # ĐÃ VIẾT, CHƯA CHẠY: environment `dev` chỉ deploy từ `main` và workflow này đang tắt, nên lần chạy thật đầu tiên là
+      # sau khi merge và bật lại. Bước này gộp preview và up vào một lần chạy của CLI: preview có refresh, chặn nếu có
+      # delete/replace (exit 2), rồi up. Exit 3 nghĩa là stack đang bị lock bởi update khác (CLI không bao giờ cancel).
+      # JSON summary ra file, KHÔNG in ra log vì có outputs (URL/ARN chứa account ID). Bảng `timings` bên dưới nhóm
+      # theo tiền tố tên bước, nên preview và up giờ nằm chung giai đoạn `up`.
+      - name: "up: deploy worker (deploy CLI)"
+        working-directory: tools/deploy-cli
+        env:
+          PULUMI_ORG: ${{ vars.PULUMI_ORG }}
+        run: |
+          set -euo pipefail
+          npm run -s deploy -- --domain worker --env dev --apply > "${RUNNER_TEMP}/deploy-summary.json"
+      - name: "up: summary"
+        if: always()
+        run: |
+          if [ -s "${RUNNER_TEMP}/deploy-summary.json" ]; then
+            jq -r '.reports[] | "\(.domain): \(.status) plan=\(.changeSummary | tojson) up=\((.update.changeSummary // {}) | tojson)"' "${RUNNER_TEMP}/deploy-summary.json"
+            jq -r '"exitCode=\(.exitCode) interrupted=\(.interrupted)"' "${RUNNER_TEMP}/deploy-summary.json"
+          else
+            echo "no summary: the deploy CLI exited before printing one (see the step above)"
+          fi
 
       # Smoke test theo Day 2: gửi message hợp lệ với eventId duy nhất, đợi dòng log "processed" của đúng eventId.
       # --start-time chặn việc một dòng log của run cũ làm test qua nhầm. Trần 120 giây để chừa chỗ cho cold start

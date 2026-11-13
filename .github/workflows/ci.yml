@@ -142,16 +142,34 @@ jobs:
           requested-token-type: urn:pulumi:token-type:access_token:personal
           scope: user:${{ vars.PULUMI_USER }}
           token-expiration: 1800
-      # `defaults.run.working-directory` chỉ áp dụng cho `run`; action của Pulumi cần `work-dir` riêng.
-      - uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
+      # Deploy CLI gọi `pulumi` qua Automation API nên CLI phải có trên PATH. Bỏ `command` nghĩa là action chỉ cài CLI
+      # (README của pulumi/actions, mục "Installation Only"), đúng phiên bản mà CLI đã được kiểm chứng.
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
         with:
-          command: preview
-          stack-name: ${{ vars.PULUMI_STACK_DEV }}
-          work-dir: infra/worker
           pulumi-version: '3.274.1'
-          diff: true
-          refresh: true
-          comment-on-pr: false
+      - name: deploy-cli - install
+        working-directory: tools/deploy-cli
+        run: npm ci
+      # Preview bằng deploy CLI (chỉ domain worker: role CI chưa có quyền SSM nên chưa deploy được config). Chế độ mặc định
+      # là preview: có diff vẫn exit 0, đúng ý "cho reviewer xem thay đổi". Khác bản cũ: không refresh trước khi preview
+      # (cùng ngữ nghĩa với `pulumi preview` thủ công). JSON summary ra file chứ không in ra log; tiến trình và diff ở stderr.
+      - name: Preview worker (deploy CLI)
+        working-directory: tools/deploy-cli
+        env:
+          PULUMI_ORG: ${{ vars.PULUMI_ORG }}
+        run: |
+          set -euo pipefail
+          npm run -s deploy -- --domain worker --env dev > "${RUNNER_TEMP}/preview-summary.json"
+      - name: Preview summary
+        if: always()
+        run: |
+          if [ -s "${RUNNER_TEMP}/preview-summary.json" ]; then
+            jq -r '.reports[] | "\(.domain): \(.status) plan=\(.changeSummary | tojson) up=\((.update.changeSummary // {}) | tojson)"' "${RUNNER_TEMP}/preview-summary.json"
+            jq -r '"exitCode=\(.exitCode) interrupted=\(.interrupted)"' "${RUNNER_TEMP}/preview-summary.json"
+          else
+            echo "no summary: the deploy CLI exited before printing one (see the step above)"
+          fi
 
   # PR environment: mỗi PR cùng repo có đúng một stack `pr-<số PR>` (SQS + DLQ + Lambda + log group; không ALB/NAT).
   # - `needs: unit`: code lỗi test không bao giờ nhận credentials (cùng nguyên tắc với `preview`).
