@@ -96,6 +96,7 @@ trước khi chuyển repo sang public: 6/8 run đầu tiên in ID thật.
 | Policy Pulumi từ chối sub khác (một phần) | `oidc-check.yml` run 43192266735: job không environment so với job `preview`, cùng input | `401 access_denied` cho job không environment; job `preview` nhận token. Sub của `pr-env` và của repo khác chưa kiểm |
 | Policy Pulumi của `dev`/`prod`: từ chối trước, cho phép sau khi thêm policy | `oidc-check.yml` run 43216318729 (`denied`) rồi 43218073008 (`allowed`) | trước: `401 access_denied` cả hai (loại trừ policy dạng `…:environment:*`); sau: nhận token cả hai, job không environment vẫn bị từ chối |
 | Deploy dev thật bằng `lab-deploy-dev` + smoke test | `deploy-dev.yml` run 43218214696 (tạo mới), 43219275793 (no-op) | `+ 11 created` (1m24s), smoke `processed` ở poll 3; lần hai `11 unchanged`. Job 156s và 69s |
+| Job `preview` của PR chạy deploy CLI (Day 5) | PR #7, run 43363459240 | `Pulumi has been successfully installed` (pulumi/actions, bỏ `command`); `worker: preview-ok plan={"same":11}`, exit 0; log không có account ID chưa che. Khác bản cũ: không refresh trước khi preview. `Deploy dev` dùng CLI thì chưa chạy |
 | `lab-preview` đủ quyền đọc trên stack có resource thật | PR probe #3 (rỗng, đã đóng), run 43218848378: `preview --refresh` | `11 unchanged`, không AccessDenied; CloudTrail của phiên: 0 lỗi |
 | Cổng phê duyệt environment `prod` | `prod-preview.yml` run 43219292785 | job `waiting`, chưa runner/bước nào chạy; sau khi **owner tự phê duyệt**: assume `lab-deploy-prod`, preview prod `+ 11 to create`. Không phải phê duyệt độc lập |
 | Test lỗi làm check đỏ và preview không nhận credentials | PR demo #2 (đã đóng không merge), run 43191426545 | `unit` failure ở bước `worker - test`; `preview` skipped. PR vẫn `MERGEABLE` (`UNSTABLE`) vì **lúc đó chưa có ruleset** (repo còn private); xem hàng ngay dưới |
@@ -166,7 +167,7 @@ GitHub job → OIDC token (aud urn:pulumi:org:<org>) → Pulumi Cloud → access
 
 Workflow dùng `pulumi/auth-actions` (ghim SHA, v2.1.2): action đổi token của GitHub lấy Pulumi access token (yêu cầu 1800 giây,
 server có thể giảm), tự mask và xuất `PULUMI_ACCESS_TOKEN` cho bước sau. Trong GitHub không có secret Pulumi nào; bước
-`pulumi/actions` **không được** tự đặt `PULUMI_ACCESS_TOKEN` (biến rỗng sẽ ghi đè token vừa xuất).
+mọi bước Pulumi sau đó (`pulumi/actions`, và deploy CLI từ Day 5) **không được** tự đặt `PULUMI_ACCESS_TOKEN` (biến rỗng sẽ ghi đè token vừa xuất).
 
 Cấu hình một lần ở Pulumi Cloud, do chủ organization làm trên giao diện (Settings → Access Management → OIDC Issuers):
 
@@ -211,8 +212,9 @@ Rủi ro còn lại (đã nhỏ hơn token tĩnh, nhưng không bằng không):
 ## Deploy dev, chống chồng deploy và cổng phê duyệt prod
 
 **Deploy dev** (`deploy-dev.yml`, chạy khi push vào `main` hoặc dispatch tay từ `main`): build và test, assume `lab-deploy-dev`, đăng nhập Pulumi bằng OIDC,
-`preview`, `up`, rồi smoke test (gửi một message với eventId duy nhất vào queue và đợi dòng log `"status":"processed"` của đúng eventId, trần 120 giây).
-Lần đầu tạo 11 resource trong 1m24s (job 156s); lần hai là no-op (`11 unchanged`, job 69s). Không đặt timeout nào để làm đẹp số đo.
+chạy deploy CLI (`--domain worker --env dev --apply`: preview có refresh, chặn nếu có delete/replace, rồi `up`), rồi smoke test (gửi một message với eventId duy nhất vào queue và đợi dòng log `"status":"processed"` của đúng eventId, trần 120 giây).
+**Bước deploy bằng CLI đã được viết nhưng CHƯA chạy thật** (environment `dev` chỉ deploy từ `main` và workflow đang tắt). Các số đo ngay dưới là của bản cũ, hai bước `pulumi/actions` `preview` rồi `up` (Day 4), giữ làm lịch sử:
+lần đầu tạo 11 resource trong 1m24s (job 156s); lần hai là no-op (`11 unchanged`, job 69s). Không đặt timeout nào để làm đẹp số đo.
 Workflow cũng ghi một bảng thời gian vào job summary (chỉ thời gian, không ARN/URL); nội dung bảng đó chưa được kiểm tra. Số đo trong tài liệu này lấy từ API (`started_at`/`completed_at` của từng bước).
 
 Lưu ý khi dùng `oidc-check.yml`: input `env_pulumi` mặc định `allowed` (đúng khi policy Pulumi của environment đã có). Job `prod` chỉ chạy khi bật `include_prod`, và khi đó nó **chờ phê duyệt** vì environment `prod` có required reviewers.
