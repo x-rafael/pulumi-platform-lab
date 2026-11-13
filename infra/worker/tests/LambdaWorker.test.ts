@@ -1,3 +1,4 @@
+import * as pulumi from "@pulumi/pulumi";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import type { LambdaWorker, LambdaWorkerArgs } from "../components/LambdaWorker.js";
 import { type MockRuntime, resolveOutput, setupMocks } from "./mocks.js";
@@ -249,6 +250,44 @@ describe("validation", () => {
   test("input sai không tạo resource con nào", () => {
     expect(() => new Ctor("wk-nochild", { ...BASE, timeoutSeconds: 0 })).toThrow();
     expect(runtime.registrations.filter((r) => r.name.startsWith("wk-nochild-"))).toEqual([]);
+  });
+});
+
+describe("biến môi trường của function (functionEnvironment)", () => {
+  test("không truyền: function không có khối environment (stack cũ không bị đổi)", () => {
+    expect(reg(T.fn, shared.c.fn).inputs.environment).toBeUndefined();
+  });
+
+  test("map rỗng cũng không tạo khối environment", async () => {
+    const { c } = await build("wk-env-empty", { functionEnvironment: {} });
+    expect(reg(T.fn, c.fn).inputs.environment).toBeUndefined();
+  });
+
+  test("truyền biến: nối đúng vào Lambda environment.variables", async () => {
+    const { c } = await build("wk-env", { functionEnvironment: { MESSAGE_PREFIX: "from-test", OTHER_NAME: "x" } });
+    expect(reg(T.fn, c.fn).inputs.environment).toEqual({
+      variables: { MESSAGE_PREFIX: "from-test", OTHER_NAME: "x" },
+    });
+  });
+
+  test("giá trị là Output (như đọc từ StackReference) vẫn được nối và resolve", async () => {
+    const prefix = pulumi.output("from-output");
+    const { c } = await build("wk-env-out", { functionEnvironment: { MESSAGE_PREFIX: prefix } });
+    const variables = reg(T.fn, c.fn).inputs.environment.variables as Record<string, unknown>;
+    expect(await resolveOutput(variables.MESSAGE_PREFIX as pulumi.Output<string>)).toBe("from-output");
+  });
+
+  test.each([
+    ["bắt đầu bằng số", "1PREFIX"],
+    ["có dấu gạch ngang", "MESSAGE-PREFIX"],
+    ["một ký tự", "A"],
+    ["chuỗi rỗng", ""],
+    ["tiền tố AWS_LAMBDA_ dành riêng cho runtime", "AWS_LAMBDA_FOO"],
+  ])("tên không hợp lệ (%s) → throw và không tạo resource con", (_label, name) => {
+    expect(() => new Ctor("wk-env-bad", { ...BASE, functionEnvironment: { [name]: "x" } })).toThrow(
+      "Invalid functionEnvironment name",
+    );
+    expect(runtime.registrations.filter((r) => r.name.startsWith("wk-env-bad-"))).toEqual([]);
   });
 });
 

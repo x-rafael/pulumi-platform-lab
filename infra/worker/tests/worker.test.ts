@@ -33,17 +33,28 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 const logged = (spy: MockInstance<typeof console.log>) =>
   spy.mock.calls.map(([line]) => JSON.parse(String(line)) as Record<string, unknown>);
 
 describe("handler", () => {
-  test("record tốt: không có failure, log processed với eventId và messageId", async () => {
+  test("record tốt: không có failure, log processed với eventId, messageId và prefix từ MESSAGE_PREFIX", async () => {
+    vi.stubEnv("MESSAGE_PREFIX", "from-config-stack");
     const res = await handler(event(record("m-1", good("day2-ok-001"))));
     expect(res).toEqual({ batchItemFailures: [] });
-    expect(logged(log)).toEqual([{ status: "processed", eventId: "day2-ok-001", messageId: "m-1" }]);
+    expect(logged(log)).toEqual([
+      { status: "processed", eventId: "day2-ok-001", messageId: "m-1", prefix: "from-config-stack" },
+    ]);
     expect(err).not.toHaveBeenCalled();
+  });
+
+  test("thiếu MESSAGE_PREFIX: log prefix là null, không bịa giá trị và không làm record lỗi", async () => {
+    vi.stubEnv("MESSAGE_PREFIX", undefined);
+    const res = await handler(event(record("m-1", good("day2-ok-001"))));
+    expect(res).toEqual({ batchItemFailures: [] });
+    expect(logged(log)).toEqual([{ status: "processed", eventId: "day2-ok-001", messageId: "m-1", prefix: null }]);
   });
 
   test("forceFail omitted được coi là false", async () => {

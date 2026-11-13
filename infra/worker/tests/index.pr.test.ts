@@ -61,6 +61,13 @@ test("pr-12 + environment=dev: tên vật lý có stack, tag PR đầy đủ", a
   // Tên role cố định theo stack: policy của lab-pr-env cho phép `platform-worker-pr-*-role`, không đụng role của dev.
   expect(runtime.one("aws:iam/role:Role", "platform-worker-role").inputs.name).toBe("platform-worker-pr-12-role");
 
+  // Stack PR không khai báo configStack: độc lập với stack config, dùng prefix mặc định của lab, và không có
+  // StackReference nào nên dọn được theo đúng vòng đời PR đã viết (không cần stack config tồn tại).
+  expect(runtime.one("aws:lambda/function:Function", "platform-worker-fn").inputs.environment).toEqual({
+    variables: { MESSAGE_PREFIX: "lab" },
+  });
+  expect(runtime.ofType("pulumi:pulumi:StackReference")).toEqual([]);
+
   const expectedTags = {
     Service: "platform-worker",
     Environment: "dev",

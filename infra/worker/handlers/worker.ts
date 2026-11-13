@@ -53,8 +53,15 @@ export async function handler(event: SQSEvent): Promise<SQSBatchResponse> {
       if (message.forceFail) {
         throw new Error(`forceFail requested for ${message.eventId}`);
       }
+      // `prefix` đến từ biến môi trường MESSAGE_PREFIX (đọc từ stack platform-config, hoặc mặc định của lab).
+      // Đọc lúc xử lý chứ không lúc nạp module để test đổi được giá trị; thiếu biến thì ghi null, không bịa giá trị.
       console.log(
-        JSON.stringify({ status: "processed", eventId, messageId: record.messageId }),
+        JSON.stringify({
+          status: "processed",
+          eventId,
+          messageId: record.messageId,
+          prefix: process.env.MESSAGE_PREFIX ?? null,
+        }),
       );
     } catch (error) {
       logFailure(record, eventId, error);
