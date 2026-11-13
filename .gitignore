@@ -2,6 +2,7 @@
 node_modules/
 dist/
 infra/worker/bin/
+infra/config/bin/
 .vitest/
 
 # State và secrets: không bao giờ commit
