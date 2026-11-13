@@ -71,6 +71,31 @@ jobs:
         working-directory: scripts
         run: npm test
 
+      # Config: project platform-config (SSM parameter dùng chung); worker đọc output của nó qua StackReference.
+      # Test dùng mocks của Pulumi, không gọi AWS.
+      - name: config - install
+        working-directory: infra/config
+        run: npm ci
+      - name: config - typecheck
+        working-directory: infra/config
+        run: npm run typecheck
+      - name: config - test
+        working-directory: infra/config
+        run: npm test
+
+      # Deploy CLI: quyết định có preview/apply/check hay không và exit code CI sẽ thấy. Test dùng adapter giả (không gọi
+      # Pulumi hay AWS); vài test chạy CLI như process thật nhưng chỉ với ca lỗi TRƯỚC khi chạm Pulumi, và xoá PULUMI_ORG
+      # khỏi môi trường của process con.
+      - name: deploy-cli - install
+        working-directory: tools/deploy-cli
+        run: npm ci
+      - name: deploy-cli - typecheck
+        working-directory: tools/deploy-cli
+        run: npm run typecheck
+      - name: deploy-cli - test
+        working-directory: tools/deploy-cli
+        run: npm test
+
   preview:
     name: preview
     needs: unit
