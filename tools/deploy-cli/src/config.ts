@@ -9,14 +9,16 @@ import * as path from "node:path";
 export const EXIT = {
     OK: 0,
     RUNTIME: 1, // runtime/provider/backend/auth hoặc config lỗi
-    CHANGES_DETECTED: 2, // --check thấy thay đổi bị gate chặn
+    // Gate chặn thay đổi: --check thấy thay đổi (chặng 2); --apply bị policy chặn trước `up`, hoặc `up` làm
+    // điều nằm ngoài gate (chặng 1). Hợp đồng gốc chỉ định nghĩa 2 cho check; mở rộng cho apply có chủ đích.
+    GATE_BLOCKED: 2,
     STACK_LOCKED: 3, // stack đang có update khác
     USAGE: 64, // cú pháp/đầu vào không hợp lệ (cả apply bị policy từ chối)
     INTERRUPTED: 130, // Ctrl-C
 } as const;
 
 export const ALL = "all";
-export const DOMAINS = ["worker"] as const; // "config" được thêm ở chặng 3
+export const DOMAINS = ["config", "worker"] as const;
 export const ENVIRONMENTS = ["dev", "test", "prod"] as const;
 export const MODES = ["preview", "apply", "check"] as const;
 
@@ -29,6 +31,16 @@ export type Domain = (typeof DOMAINS)[number];
 export type DomainSelection = Domain | typeof ALL;
 export type Environment = (typeof ENVIRONMENTS)[number];
 export type Mode = (typeof MODES)[number];
+
+/**
+ * `DOMAIN_DEPENDENCIES[x]` là các domain phải xong TRƯỚC x. worker đọc output của config qua StackReference
+ * (`messagePrefix`), nên config phải được deploy trước. Thứ tự giữa các stack do CLI điều phối: bản thân Pulumi
+ * không tự deploy stack được tham chiếu.
+ */
+export const DOMAIN_DEPENDENCIES = {
+    config: [],
+    worker: ["config"],
+} as const satisfies Record<(typeof DOMAINS)[number], readonly (typeof DOMAINS)[number][]>;
 
 interface RequestBase {
     domain: DomainSelection;
@@ -203,10 +215,12 @@ export function assertApplyAllowed(request: DeployRequest): void {
 export const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 
 const DOMAIN_DIRS = {
+    config: path.join("infra", "config"),
     worker: path.join("infra", "worker"),
 } as const satisfies Record<Domain, string>;
 
 const PULUMI_PROJECTS = {
+    config: "platform-config",
     worker: "platform-worker",
 } as const satisfies Record<Domain, string>;
 
@@ -214,9 +228,38 @@ export function domainsFor(selection: DomainSelection): readonly Domain[] {
     return selection === ALL ? DOMAINS : [selection];
 }
 
+export function isDomain(value: string): value is Domain {
+    return isOneOf(DOMAINS, value);
+}
+
+/**
+ * Đồ thị phụ thuộc của riêng các domain được chọn. Chọn một domain thì KHÔNG kéo theo dependency của nó:
+ * `--domain worker` chạy đúng worker, giả định config đã được deploy (thiếu output thì preview báo lỗi rõ).
+ */
+export function graphFor(selection: DomainSelection): Record<string, readonly string[]> {
+    const selected = domainsFor(selection);
+    return Object.fromEntries(
+        selected.map((domain) => [domain, DOMAIN_DEPENDENCIES[domain].filter((dependency) => selected.includes(dependency))]),
+    );
+}
+
 /** Đường dẫn tuyệt đối của Pulumi project (nơi có Pulumi.yaml). */
 export function workDirFor(domain: Domain, repoRoot: string = REPO_ROOT): string {
     return path.join(repoRoot, DOMAIN_DIRS[domain]);
+}
+
+/** Tên Pulumi project (trùng `name:` trong Pulumi.yaml); cũng là namespace của config, vd `platform-worker:environment`. */
+export function projectFor(domain: Domain): string {
+    return PULUMI_PROJECTS[domain];
+}
+
+/** Org của Pulumi Cloud lấy từ biến môi trường PULUMI_ORG (cùng quy ước với workflows), không hardcode vào source. */
+export function requireOrg(env: Readonly<Record<string, string | undefined>>): string {
+    const org = env.PULUMI_ORG;
+    if (org === undefined || org === "") {
+        throw new Error("PULUMI_ORG is not set (the Pulumi organization that owns the stacks)");
+    }
+    return org;
 }
 
 /** Tên stack đầy đủ `<org>/<project>/<stack>`. Org lấy từ ngoài (biến môi trường PULUMI_ORG), không hardcode. */

@@ -8,7 +8,9 @@ import {
     UsageError,
     assertApplyAllowed,
     domainsFor,
+    graphFor,
     parseArgs,
+    projectFor,
     stackNameFor,
     workDirFor,
 } from "../src/config";
@@ -52,6 +54,10 @@ describe("parseArgs: input hợp lệ", () => {
         });
         expect(parseArgs(["--domain", "worker", "--env", "test"]).env).toBe("test");
     });
+
+    it("nhận domain config (domain thứ hai của allowlist)", () => {
+        expect(parseArgs(["--domain", "config", "--env", "dev"]).domain).toBe("config");
+    });
 });
 
 describe("parseArgs: input bị từ chối", () => {
@@ -79,7 +85,8 @@ describe("parseArgs: input bị từ chối", () => {
     it.each([
         ["đường dẫn thoát khỏi repo", "../../other-project"],
         ["sai hoa/thường", "WORKER"],
-        ["domain chưa có trong allowlist", "config"],
+        ["tên project thay vì tên domain", "platform-config"],
+        ["số nhiều", "workers"],
         ["chuỗi rỗng", ""],
         ["tên thuộc tính của Object", "constructor"],
         ["tên thuộc tính của Object (proto)", "__proto__"],
@@ -202,6 +209,23 @@ describe("domain → thư mục và stack", () => {
     it("domainsFor mở rộng all thành toàn bộ allowlist", () => {
         expect(domainsFor("all")).toEqual([...DOMAINS]);
         expect(domainsFor("worker")).toEqual(["worker"]);
+        expect(domainsFor("config")).toEqual(["config"]);
+    });
+
+    it("graphFor all giữ ràng buộc worker phụ thuộc config", () => {
+        expect(graphFor("all")).toEqual({ config: [], worker: ["config"] });
+    });
+
+    it("graphFor một domain KHÔNG kéo theo dependency: --domain worker chỉ chạy worker", () => {
+        expect(graphFor("worker")).toEqual({ worker: [] });
+        expect(graphFor("config")).toEqual({ config: [] });
+    });
+
+    it("mỗi domain có thư mục, project và stack riêng", () => {
+        expect(workDirFor("config")).toBe(path.join(REPO_ROOT, "infra", "config"));
+        expect(stackNameFor("example-org", "config", "dev")).toBe("example-org/platform-config/dev");
+        expect(stackNameFor("example-org", "worker", "dev")).toBe("example-org/platform-worker/dev");
+        expect(projectFor("config")).toBe("platform-config");
     });
 
     it("tên stack đầy đủ org/project/stack", () => {
